@@ -5,10 +5,10 @@ This folder contains scripts for automated collection of academic papers through
 
 ## Supported APIs
 Currently implemented:
-- CrossRef REST API
+- AgEcon
   - No authentication required
-  - Rate limit: 50 requests/second
-  - Documentation: https://api.crossref.org/
+  - No Rate-Limits
+  - Documentation: https://doapr.coar-repositories.org/repositories/agecon-search/
 
 *More APIs to be added as the project expands*
 
@@ -17,12 +17,13 @@ All papers are stored in JSON format with the following schema:
 
 ```
 {
+"doi": "string" 
 "title": "string", // Full title of the paper
 'link': "string", // Link where the paper is found
 'authors': "list", // A list of all the authors of a paper
 'publication': "string", // Where the paper was published
 'country': "string", // Country where paper is sourced (if available)
-"date": "string", // Publication date (YYYY-MM-DD)
+"date": "string", // Publication date (YYYY)
 "field": "string", // Publication broad field(psychology, economics, political science e.t.c)
 "institution": "string", // Publishing institution (if available)
 "abstract": "string" // Paper abstract
@@ -39,7 +40,7 @@ All papers are stored in JSON format with the following schema:
 
 ```
 ├── api_scripts/
-│ ├── crossref_pull.py
+│ ├── AgEcon.py
 │ ├── [future_api_scripts].py
 | ├── README.md
 | └── Data
