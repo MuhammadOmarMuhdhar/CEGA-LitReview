@@ -1,38 +1,43 @@
 # Research Paper API Collection Scripts
 
 ## Overview
-This folder contains scripts for automated collection of academic papers through various public APIs. The primary purpose is to gather scholarly articles that can be processed and tagged for research purposes, particularly focusing on psychology and poverty literature.
+This folder contains scripts for automated collection of academic papers through public APIs. The primary purpose is to gather scholarly articles that can be processed and tagged for research purposes, particularly focusing on psychology and economics of poverty literature.
 
 ## Supported APIs
 Currently implemented:
-- AgEcon
+- OpenAlex
   - No authentication required
-  - No Rate-Limits
-  - Documentation: https://doapr.coar-repositories.org/repositories/agecon-search/
+  - Rate Limits:
+    - 10 requests per second (burst limit)
+    - 100,000 requests per 24-hour period
+  - Documentation: https://docs.openalex.org
 
-*More APIs to be added as the project expands*
 
 ## Data Structure
 All papers are stored in JSON format with the following schema:
 
 ```
+
 {
-"doi": "string" 
-"title": "string", // Full title of the paper
-'link': "string", // Link where the paper is found
-'authors': "list", // A list of all the authors of a paper
-'publication': "string", // Where the paper was published
-'country': "string", // Country where paper is sourced (if available)
-"date": "string", // Publication date (YYYY)
-"field": "string", // Publication broad field(psychology, economics, political science e.t.c)
-"institution": "string", // Publishing institution (if available)
-"abstract": "string" // Paper abstract
+    "doi": "string",  // Digital Object Identifier - unique paper identifier
+    "title": "string",  // Complete academic paper title
+    "link": "string",  // URL to access the paper
+    "authors": ["string"],  // Array of author names
+    "publication": "string",  // Journal or publication venue name
+    "country": "string",  // Country of publication origin (when available)
+    "date": "string",  // Publication year in YYYY format
+    "field": "string",  // Primary academic discipline (e.g., psychology, economics)
+    "institution": "string",  // Affiliated research institution (when available)
+    "abstract": "string",  // Paper summary/abstract
+    "cited_by_count": "integer",  // Total citation count
+    "citing_works": ["string"],  // DOIs of papers citing this work
+    "referenced_works": ["string"]  // DOIs of works cited in this paper
 }
 
 ```
 
 ## Usage
-1. Each API has its own dedicated script in the repository
+1. Each API should have its own dedicated script in the repository
 2. Scripts can be run independently to collect data from specific sources
 3. Output files are stored in JSON format for further processing
 
@@ -40,12 +45,10 @@ All papers are stored in JSON format with the following schema:
 
 ```
 ├── api_scripts/
-│ ├── AgEcon.py
+│ ├── openalex.py
 │ ├── [future_api_scripts].py
 | ├── README.md
-| └── Data
-|   ├──
-
+├── Data
 ```
 
 ## Contributing
