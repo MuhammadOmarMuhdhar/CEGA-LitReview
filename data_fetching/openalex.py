@@ -5,101 +5,124 @@ import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Union, Optional
+from datetime import datetime, timedelta
+from collections import deque
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class RateLimiter:
+    """Implements token bucket algorithm for rate limiting."""
+    def __init__(self, requests_per_second: int = 10):
+        self.requests_per_second = requests_per_second
+        self.tokens = requests_per_second
+        self.last_update = datetime.now()
+        self.window = deque(maxlen=requests_per_second)
+    
+    def acquire(self):
+        """Wait if necessary and acquire a token."""
+        now = datetime.now()
+        
+        # Remove timestamps older than 1 second
+        while self.window and (now - self.window[0]) > timedelta(seconds=1):
+            self.window.popleft()
+        
+        # If we've made too many requests in the last second, wait
+        if len(self.window) >= self.requests_per_second:
+            sleep_time = 1 - (now - self.window[0]).total_seconds()
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+                now = datetime.now()
+        
+        self.window.append(now)
 
 def create_session() -> requests.Session:
     """Creates a requests session with retry logic and timeouts."""
     session = requests.Session()
     retries = Retry(
         total=5,
-        backoff_factor=0.5,
-        status_forcelist=[500, 502, 503, 504]
+        backoff_factor=1,  # Increased backoff factor
+        status_forcelist=[429, 500, 502, 503, 504],  # Added 429 for rate limits
+        respect_retry_after_header=True  # Honor server's retry-after header
     )
     adapter = HTTPAdapter(max_retries=retries)
     session.mount('https://', adapter)
+    
+    # Add default headers
+    session.headers.update({
+        'User-Agent': 'YourApp/1.0 (mailto:your-email@example.com)'
+    })
     return session
 
-def clean_abstract(abstract_index: Union[Dict, str]) -> str:
-    """
-    Reconstructs an abstract from OpenAlex's inverted index format into readable text.
+def make_request(session: requests.Session, url: str, params: dict, rate_limiter: RateLimiter) -> dict:
+    """Makes a rate-limited request to OpenAlex API."""
+    rate_limiter.acquire()
     
-    Args:
-        abstract_index (dict or str): Either a dictionary containing the inverted index
-            format from OpenAlex (word -> positions) or a plain text string.
-    
-    Returns:
-        str: The reconstructed abstract text with words in correct order.
-    """
-    if not isinstance(abstract_index, dict):
-        return abstract_index
-    
-    # Use generator expression for memory efficiency
-    word_positions = ((pos, word) 
-                     for word, positions in abstract_index.items() 
-                     if isinstance(positions, list)
-                     for pos in positions)
-    
-    return ' '.join(word for _, word in sorted(word_positions, key=lambda x: x[0]))
+    try:
+        response = session.get(url, params=params, timeout=30)
+        
+        # Handle rate limiting explicitly
+        if response.status_code == 429:
+            retry_after = int(response.headers.get('Retry-After', 60))
+            logger.warning(f"Rate limit hit. Waiting {retry_after} seconds...")
+            time.sleep(retry_after)
+            return make_request(session, url, params, rate_limiter)
+        
+        response.raise_for_status()
+        return response.json()
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Request failed: {e}")
+        raise
 
-def get_dois(works: List[str], session: requests.Session) -> List[str]:
-    """
-    Extracts DOIs from referenced works using batch requests.
-    
-    Args:
-        works (list): List of OpenAlex work URLs.
-        session (requests.Session): Requests session for connection reuse.
-    
-    Returns:
-        list: A list of cleaned DOIs.
-    """
+def get_dois(works: List[str], session: requests.Session, rate_limiter: RateLimiter) -> List[str]:
+    """Extracts DOIs from referenced works using batch requests."""
     if not works:
         return []
 
     dois = []
     base_url = "https://api.openalex.org/works"
 
-    # Process works in batches of 200
-    for i in range(0, len(works), 200):
-        batch = works[i:i+200]
+    # Process works in batches of 50 (reduced from 200 for better rate limiting)
+    for i in range(0, len(works), 50):
+        batch = works[i:i+50]
         work_ids = [w.split('/')[-1] for w in batch]
         filter_str = f"openalex:{('|').join(work_ids)}"
         
         try:
             url = f"{base_url}?filter={filter_str}"
-            response = session.get(url, timeout=30)
-            response.raise_for_status()
+            data = make_request(session, url, {}, rate_limiter)
             
-            # Basic rate limiting
-            time.sleep(0.1)
-            
-            if response.status_code == 200:
-                data = response.json()
-                batch_dois = [work.get('doi') for work in data.get('results', []) if work.get('doi')]
-                clean_dois = [doi.strip('https://doi.org/') for doi in batch_dois if doi]
-                dois.extend(clean_dois)
+            batch_dois = [work.get('doi') for work in data.get('results', []) if work.get('doi')]
+            clean_dois = [doi.strip('https://doi.org/') for doi in batch_dois if doi]
+            dois.extend(clean_dois)
                 
-        except requests.Timeout:
-            logger.error("Request timed out while fetching DOIs")
         except requests.RequestException as e:
             logger.error(f"Error fetching batch: {e}")
             
     return dois
 
-def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optional[int] = None) -> List[Dict]:
+def clean_abstract(abstract_index: Union[Dict, str]) -> str:
     """
-    Extracts paper information from OpenAlex API with improved efficiency.
-    
+    Reconstructs an abstract from OpenAlex's inverted index format into readable text.
     Args:
-        broad_field (str): The broad academic field to categorize the papers under.
-        keyword (str, optional): Search term to filter papers. Defaults to "Psychology".
-        limit (int, optional): Maximum number of papers to retrieve. Defaults to None.
-    
+        abstract_index (dict or str): Either a dictionary containing the inverted index
+            format from OpenAlex (word -> positions) or a plain text string.
     Returns:
-        list: List of dictionaries containing paper information.
+        str: The reconstructed abstract text with words in correct order.
     """
+    if not isinstance(abstract_index, dict):
+        return abstract_index
+    # Use generator expression for memory efficiency
+    word_positions = ((pos, word) 
+                     for word, positions in abstract_index.items() 
+                     if isinstance(positions, list)
+                     for pos in positions)
+    return ' '.join(word for _, word in sorted(word_positions, key=lambda x: x[0]))
+
+def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optional[int] = None) -> List[Dict]:
+    """Extracts paper information from OpenAlex API with improved rate limiting."""
     if keyword is not None and not isinstance(keyword, str):
         raise ValueError("Keyword must be a string")
     
@@ -108,25 +131,23 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
     
     base_url = "https://api.openalex.org/works"
     params = {
-        "mailto": "muhammad_muhdhar@berkeley.edu",
+        "mailto": "your-email@example.com",  # Replace with your email
         "search": keyword,
         "cursor": "*",
-        "per_page": min(200, limit) if limit else 200,
+        "per_page": min(50, limit) if limit else 50,  # Reduced from 200
         "filter": "type:article"
     }
 
     papers = []
     total_fetched = 0
     session = create_session()
+    rate_limiter = RateLimiter(requests_per_second=10)  # OpenAlex allows ~10 req/second
 
     try:
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:  # Reduced from 5
             while True:
                 try:
-                    response = session.get(base_url, params=params, timeout=30)
-                    response.raise_for_status()
-                    time.sleep(0.1)  # Rate limiting
-                    data = response.json()
+                    data = make_request(session, base_url, params, rate_limiter)
                     
                     futures = []
                     current_papers = []
@@ -141,9 +162,8 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
                             if x.strip()]
                         referenced_works = work.get('referenced_works', [])
                         
-                        # Submit tasks to thread pool
-                        future_citing = executor.submit(get_dois, citing_works_stripped, session)
-                        future_referenced = executor.submit(get_dois, referenced_works, session)
+                        future_citing = executor.submit(get_dois, citing_works_stripped, session, rate_limiter)
+                        future_referenced = executor.submit(get_dois, referenced_works, session, rate_limiter)
                         futures.extend([future_citing, future_referenced])
                         
                         paper = {
@@ -160,13 +180,12 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
                                           for auth in work.get('authorships', [])],
                             'abstract': clean_abstract(work.get('abstract_inverted_index', 'No Abstract')),
                             'cited_by_count': work.get('cited_by_count', 0),
-                            'citing_works': None,  # Will be filled with future result
-                            'referenced_works': None  # Will be filled with future result
+                            'citing_works': None,
+                            'referenced_works': None
                         }
                         current_papers.append(paper)
                         total_fetched += 1
                     
-                    # Get results from futures and update papers
                     for i, paper in enumerate(current_papers):
                         paper['citing_works'] = futures[i*2].result()
                         paper['referenced_works'] = futures[i*2+1].result()
@@ -178,9 +197,6 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
                     
                     params['cursor'] = next_cursor
                     
-                except requests.Timeout:
-                    logger.error("Request timed out")
-                    continue
                 except requests.RequestException as e:
                     logger.error(f"Error fetching data: {e}")
                     continue
