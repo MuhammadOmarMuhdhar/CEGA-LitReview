@@ -321,41 +321,6 @@ doi,institution,country
 10.1146/annurev-soc-071312-145702,"['Indiana University Bloomington', None]","['US', None]"
 10.1037/a0032694,"['University of Connecticut', 'University of Connecticut', 'University of Pittsburgh', 'University of California, San Francisco']","['US', 'US', 'US', 'US']"
 10.1126/science.2270481,"['Vanderbilt University', None, None]","['US', None, None]"
-10.1037//0022-3514.54.6.1063,"['Southern Methodist University', None, None]","['US', None, None]"
-10.1037/0022-3514.54.6.1063,"[None, None, None]","[None, None, None]"
-10.1037/h0077714,[None],[None]
-10.1111/j.2044-8325.1990.tb00506.x,"['Western University', 'Western University']","['CA', 'CA']"
-10.1037/0022-3514.85.2.348,"['Stanford University', None]","['US', None]"
-10.1037/0033-295x.94.3.319,[None],[None]
-10.1093/nar/gkg509,['Cape Town HVTN Immunology Laboratory / Hutchinson Centre Research Institute of South Africa'],['ZA']
-10.1037/0033-2909.96.3.465,"['Southern Methodist University', None]","['US', None]"
-10.2307/1982025,"['University of Nebraska–Lincoln', None, None]","['US', None, None]"
-10.2307/256727,['Georgetown University'],['US']
-10.1097/00004583-199707000-00021,"['University of Pittsburgh', 'University of Pittsburgh', 'University of Pittsburgh', 'University of Pittsburgh', 'Vanderbilt University', 'University of Pittsburgh', 'University of Pittsburgh', 'University of Pittsburgh']","['US', 'US', 'US', 'US', 'US', 'US', 'US', 'US']"
-10.1016/s0022-1996(97)00033-0,"['International Monetary Fund', 'University of Chile', 'Korea University']","['US', 'CL', 'KR']"
-10.5860/choice.40-1946,[None],[None]
-10.1509/jmkg.65.2.81.18255,"['Fairfield University', 'Columbia University']","['US', 'US']"
-10.1006/jvbe.2001.1842,"['Western University', 'Western University', 'Western University', 'Western University']","['CA', 'CA', 'CA', 'CA']"
-10.1037/0022-3514.67.2.319,"['University of Miami', 'University of California, Los Angeles']","['US', 'US']"
-10.1093/brain/121.4.561,"['Harvard University', 'Massachusetts General Hospital']","['US', 'US']"
-10.1086/209358,['Vanderbilt University'],['US']
-10.1001/archpsyc.1984.01790120076010,"['National Institutes of Health', 'National Institutes of Health', 'University of California, San Diego', None, 'National Institutes of Health', 'National Institutes of Health', 'IS practice', 'Johns Hopkins University', 'National Institutes of Health']","['US', 'US', 'US', None, 'US', 'US', 'BE', 'US', 'US']"
-10.1111/j.1469-8986.1993.tb03352.x,"['University of Florida Health', 'University of Florida', 'University of Florida', 'University of Florida']","['US', 'US', 'US', 'US']"
-10.1126/science.1183188,"['Utrecht University', 'Utrecht University', 'Utrecht University']","['NL', 'NL', 'NL']"
-10.1126/science.1093535,"['National Hospital for Neurology and Neurosurgery', 'National Hospital for Neurology and Neurosurgery', 'University College London', 'National Hospital for Neurology and Neurosurgery', 'National Hospital for Neurology and Neurosurgery', 'National Hospital for Neurology and Neurosurgery']","['GB', 'GB', 'GB', 'GB', 'GB', 'GB']"
-10.1002/(sici)1099-0771(200001/03)13:1<1::aid-bdm333>3.0.co;2-s,"['Decision Research', 'Imam Mohammad ibn Saud Islamic University', 'Decision Research', 'Decision Research']","['US', 'SA', 'US', 'US']"
-10.1080/026999398379628,[None],[None]
-10.2189/asqu.2005.50.3.367,"['Harvard University Press', 'California University of Pennsylvania', 'New York University', 'University of California, Berkeley']","['US', 'US', 'US', 'US']"
-10.1037/0022-3514.45.3.513,"['Heidelberg University', None]","['DE', None]"
-10.1257/jep.20.2.23,"['University of Rome Tor Vergata', 'National Bureau of Economic Research', 'National Bureau of Economic Research']","['IT', 'US', 'US']"
-10.1215/01642472-22-2_79-117,[None],[None]
-10.1037/0003-066x.39.2.117,['University of Michigan–Ann Arbor'],['US']
-10.1093/poq/nfs038,"['Stanford University', 'Woodrow Wilson International Center for Scholars', 'National Research Foundation']","['US', 'US', 'ZA']"
-10.1037//0022-3514.47.5.1105,"[None, None]","[None, None]"
-10.1037//0022-3514.52.6.1122,"['University of Maryland, Baltimore County', None, None]","['US', None, None]"
-10.1037/0033-2909.99.2.229,['University of Miami'],['US']
-10.1037/0033-295x.96.2.234,"['Southern Methodist University', None]","['US', None]"
-10.1037/0003-066x.55.6.647,"['San Francisco AIDS Foundation', 'University of California, San Francisco']","['US', 'US']"
 10.1002/jclp.21951,"['Loyola University Chicago', 'Georgetown University Medical Center', 'University of California, Los Angeles']","['US', 'US', 'US']"
 10.2307/2095905,"['University of Minnesota System', None]","['US', None]"
 10.1192/bjb.2020.78,"[None, 'University of the West of Scotland']","[None, 'GB']"
@@ -593,45 +558,6 @@ doi,institution,country
 10.1002/(sici)1520-6394(1998)7:3<113::aid-da3>3.0.co;2-c,"['St. Boniface Hospital', ""Rady Children's Hospital-San Diego"", 'University of California, San Diego']","['CA', 'US', 'US']"
 10.1002/ejsp.2420120402,['University College London'],['GB']
 10.1126/science.1238041,"['University of Warwick', 'Harvard University', 'Woodrow Wilson International Center for Scholars', 'University of British Columbia']","['GB', 'US', 'US', 'CA']"
-10.1126/science.7939688,"['State University of New York', None]","['US', None]"
-10.1038/nn1372,"['Geriatric Research Education and Clinical Center', 'University College Dublin', 'Geriatric Research Education and Clinical Center', 'Harvard University', 'University of Minnesota', ""Brigham and Women's Hospital"", 'University of Minnesota']","['US', 'IE', 'US', 'US', 'US', 'US', 'US']"
-10.1001/jama.300.9.1027,"[None, 'Center for Health, Exercise and Sport Sciences', None, None, None, ""St Vincent's Hospital"", 'Centre for Global Health Research', None]","[None, 'RS', None, None, None, 'AU', 'CA', None]"
-10.1001/jama.292.12.1454,['Harvard University'],['US']
-10.1038/nature10357,"['Stanford University', 'Stanford University', 'Stanford University', 'AfaSci (United States)', 'Stanford University', 'Stanford University', 'Stanford University', 'Stanford University', 'Stanford University', 'Stanford University', 'Stanford University', 'Stanford University', 'Stanford University', 'Paracelsus Medical University', 'Paracelsus Medical University', 'University of Washington', 'University of Washington', 'Portland VA Medical Center', 'Portland VA Medical Center', 'University of California, San Diego', 'AfaSci (United States)', 'VA Palo Alto Health Care System', 'Stanford University']","['US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'AT', 'AT', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US']"
-10.1207/s15326985ep2802_3,[None],[None]
-10.2307/1130201,['Yale University'],['US']
-10.1001/archneur.61.5.661,"['Rush University Medical Center', None, None, None, None]","['US', None, None, None, None]"
-10.1001/jama.1995.03530230032026,['National Institute for Public Health and the Environment'],['NL']
-10.1001/jama.289.20.2663,"['Wake Forest University', 'Wake Forest University', 'Wake Forest University', 'University of Arkansas for Medical Sciences', 'University of Nevada, Reno', 'Harvard University Press', 'University of Cincinnati', 'Stanford University', 'Stony Brook University', None, 'University of Tennessee Health Science Center', 'Wake Forest University', 'Wake Forest University', 'Fred Hutch Cancer Center', None]","['US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', None, 'US', 'US', 'US', 'US', None]"
-10.1002/1531-8249(200002)47:2<145::aid-ana3>3.3.co;2-g,"[None, None, None, 'Utrecht University', None, 'Maastricht University', None]","[None, None, None, 'NL', None, 'NL', None]"
-10.1176/appi.ajp.161.2.262,"[""Consorci Institut D'Investigacions Biomediques August Pi I Sunyer"", None, None, None, None, None, None, None, None, None]","['ES', None, None, None, None, None, None, None, None, None]"
-10.1007/bf00992338,"['Max Planck Institute for Human Cognitive and Brain Sciences', 'Max Planck Institute for Human Cognitive and Brain Sciences']","['DE', 'DE']"
-10.1001/jama.292.21.2591,['Leiden University Medical Center'],['NL']
-10.1212/wnl.27.8.783,['Northwestern University'],['US']
-10.1212/wnl.44.7.1246,"['Erasmus University Rotterdam', 'Erasmus University Rotterdam', 'Erasmus University Rotterdam', 'Erasmus University Rotterdam', 'Erasmus University Rotterdam', 'Erasmus University Rotterdam', 'Erasmus University Rotterdam', 'Erasmus University Rotterdam', 'Erasmus University Rotterdam', 'Erasmus University Rotterdam', 'Erasmus University Rotterdam']","['NL', 'NL', 'NL', 'NL', 'NL', 'NL', 'NL', 'NL', 'NL', 'NL', 'NL']"
-10.1249/mss.0b013e318060111f,"[None, None, None, 'Universidade Federal de São Paulo', None, None, None]","[None, None, None, 'BR', None, None, None]"
-10.1162/0898929041920441,"[""Boston Children's Hospital"", ""Boston Children's Hospital"", ""Boston Children's Hospital""]","['US', 'US', 'US']"
-10.1017/s0140525x00078407,['University of Helsinki'],['FI']
-10.1002/1531-8249(200002)47:2<145::aid-ana3>3.0.co;2-p,"[None, 'Utrecht University', None, 'Utrecht University', None, 'Maastricht University', None]","[None, 'NL', None, 'NL', None, 'NL', None]"
-10.1093/cercor/11.12.1136,"['University of Cambridge', None, None, None]","['GB', None, None, None]"
-10.1001/jama.287.9.1123,['University of Wollongong'],['AU']
-10.1037/0022-3514.54.4.558,"[None, None]","[None, None]"
-10.1017/s1355617706060723,"['University at Buffalo, State University of New York', 'Jacobs Institute', 'University at Buffalo, State University of New York', 'Jacobs Institute', 'Jacobs Institute', 'Jacobs Institute', 'University at Buffalo, State University of New York']","['US', 'US', 'US', 'US', 'US', 'US', 'US']"
-10.1037//0882-7974.12.1.12,"['Max Planck Institute for Human Development', 'Max Planck Institute for Human Development']","['DE', 'DE']"
-10.1001/archpsyc.55.4.362,"['Yale University', None]","['US', None]"
-10.1038/nature10849,"['Massachusetts Institute of Technology', 'Massachusetts Institute of Technology', 'Massachusetts Institute of Technology', 'Massachusetts Institute of Technology', 'Massachusetts Institute of Technology', 'Broad Institute', 'Broad Institute', 'Broad Institute', 'Boston University', 'Massachusetts Institute of Technology', 'Howard Hughes Medical Institute', 'Massachusetts Institute of Technology', 'Massachusetts Institute of Technology', 'Broad Institute', 'Boston University', 'Howard Hughes Medical Institute']","['US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US']"
-10.1249/mss.0b013e31802f04c7,"[None, 'Center for Health, Exercise and Sport Sciences', 'Texas Tech University']","[None, 'RS', 'US']"
-10.1007/bf02247415,['Duke University Hospital'],['US']
-10.1001/jama.1996.03530310034029,[None],[None]
-10.1200/jco.2000.18.14.2695,"['Princess Margaret Cancer Centre', None, None, None, None]","['CA', None, None, None, None]"
-10.1093/brain/111.2.299,"[None, ""Parkinson's UK"", ""Parkinson's UK""]","[None, 'GB', 'GB']"
-10.3389/neuro.09.026.2009,['University of Bergen'],['NO']
-10.1046/j.1532-5415.2003.51153.x,"['University of California, Berkeley', 'University of California, San Francisco', 'University of California, Berkeley', 'University of California, Berkeley']","['US', 'US', 'US', 'US']"
-10.1001/jama.2016.9839,"['Mayo Clinic', 'Jacksonville College', 'Alliance Data (United States)', 'Penn State Milton S. Hershey Medical Center', 'Mayo Clinic', 'Mayo Clinic', 'Alliance Data (United States)', 'Massachusetts General Hospital', 'Mercy Medical Center', 'Carolinas Healthcare System', 'Centre Hospitalier de l’Université de Montréal', 'Princess Margaret Cancer Centre', 'Novant Health Forsyth Medical Center', 'Mayo Clinic', 'Mayo Clinic', 'Mayo Clinic', 'Carolinas Healthcare System']","['US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'CA', 'CA', 'US', 'US', 'US', 'US', 'US']"
-10.1056/nejmoa1106104,"[None, 'Queen Mary University of London', ""St David's Medical Center"", ""St David's Medical Center"", 'Ospedale Regina Margherita', None, 'Ospedale Regina Margherita', 'University Hospital of Wales', 'Ospedale Regina Margherita', 'Queen Mary University of London', 'Ospedale Regina Margherita', 'Ospedale Regina Margherita', None, 'Queen Mary University of London', 'Queen Mary University of London']","[None, 'GB', 'US', 'US', 'IT', None, 'IT', 'GB', 'IT', 'GB', 'IT', 'IT', None, 'GB', 'GB']"
-10.1093/geronb/52b.special_issue.37,"['University of Michigan–Ann Arbor', 'University of Iowa']","['US', 'US']"
-10.1038/nm.3569,"['University of California, San Francisco', 'University of California, San Francisco', 'Stanford University', 'Stanford University', 'Stanford University', 'Stanford University', 'Broad Center', 'Broad Center', 'Broad Center', 'Stanford University', 'Stanford University', 'Broad Center', 'Broad Center', 'AfaSci (United States)', 'Stanford University', 'CACI International (United States)', 'Stanford University', 'Stanford University']","['US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US', 'US']"
-10.1123/jsep.19.3.249,"['Arizona State University', 'Arizona State University', 'Arizona State University', 'Arizona State University', 'Arizona State University', 'Arizona State University']","['US', 'US', 'US', 'US', 'US', 'US']"
 10.1212/01.wnl.0000324420.03960.36,['Rush University Medical Center'],['US']
 10.1017/s0954579401003133,"['Douglas Mental Health University Institute', 'Douglas Mental Health University Institute', 'Douglas Mental Health University Institute', 'Rockefeller University']","['CA', 'CA', 'CA', 'US']"
 10.1001/jamanetworkopen.2020.23774,"['Washington University in St. Louis', 'Washington University in St. Louis', 'Washington University in St. Louis', 'Washington University in St. Louis']","['US', 'US', 'US', 'US']"

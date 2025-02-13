@@ -19,7 +19,6 @@ categories = {
         "Poverty and Internalized stigma"
     ],
     "Psychology-related": [
-        "Affective",
         "Poverty and mental health",
         "Poverty and Depression",
         "Poverty and Anxiety",
@@ -27,7 +26,6 @@ categories = {
         "Poverty and Happiness",
         "Poverty and self concept",
         "Poverty and self esteem",
-        "Cognitive function",
         "Poverty and Cognitive Function",
         "Poverty and Cognition",
         "Poverty and Cognitive flexibility",
@@ -56,7 +54,7 @@ df = pd.DataFrame(data)
 df.drop_duplicates(subset="doi", inplace=True)
 
 # Split the data into separate DataFrames for different aspects
-publications = df[['doi', 'title', 'link', 'abstract', 'publication', 'field', 'keyword', 'cited_by_count']]
+publications = df[['doi', 'title', 'link', 'abstract', 'date', 'publication', 'field', 'keyword', 'cited_by_count']]
 authors = df[['doi', 'authors']]
 institutions = df[['doi', 'institution', 'country']]
 citations = df[['doi', 'cited_by_count', 'referenced_works']]
