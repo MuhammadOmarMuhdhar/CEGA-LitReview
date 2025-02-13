@@ -51,7 +51,7 @@ def create_session() -> requests.Session:
     
     # Add default headers
     session.headers.update({
-        'User-Agent': 'YourApp/1.0 (mailto:your-email@example.com)'
+        'User-Agent': 'YourApp/1.0 (mailto:pepdataviz@gmail.com)'
     })
     return session
 
@@ -131,10 +131,10 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
     
     base_url = "https://api.openalex.org/works"
     params = {
-        "mailto": "your-email@example.com",  # Replace with your email
+        "mailto": "pepdataviz@gmail.com", 
         "search": keyword,
         "cursor": "*",
-        "per_page": min(50, limit) if limit else 50,  # Reduced from 200
+        "per_page": min(50, limit) if limit else 50, 
         "filter": "type:article"
     }
 
@@ -144,7 +144,7 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
     rate_limiter = RateLimiter(requests_per_second=10)  # OpenAlex allows ~10 req/second
 
     try:
-        with ThreadPoolExecutor(max_workers=3) as executor:  # Reduced from 5
+        with ThreadPoolExecutor(max_workers=3) as executor: 
             while True:
                 try:
                     data = make_request(session, base_url, params, rate_limiter)
@@ -171,6 +171,7 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
                             'title': work.get('display_name', None),
                             'link': work.get('link', None),
                             'authors': [auth['author']['display_name'] for auth in work.get('authorships', [])],
+                            "keyword": keyword,
                             'publication': 'Openalex',
                             'country': [auth['institutions'][0]['country_code'] if auth.get('institutions') else None 
                                       for auth in work.get('authorships', [])],
