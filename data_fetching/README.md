@@ -23,6 +23,7 @@ All papers are stored in JSON format with the following schema:
     "title": "string",  // Complete academic paper title
     "link": "string",  // URL to access the paper
     "authors": ["string"],  // Array of author names
+    "keyword": "string", // Key word used to search for paper
     "publication": "string",  // Journal or publication venue name
     "country": "string",  // Country of publication origin (when available)
     "date": "string",  // Publication year in YYYY format
