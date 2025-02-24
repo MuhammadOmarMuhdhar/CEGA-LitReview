@@ -2,12 +2,27 @@
 
 This dataset contains academic papers collected through the OpenAlex API focusing on the intersection of poverty with psychological and economic factors. The data is structured to support comprehensive analysis of research trends, citation networks, and institutional collaborations in this field.
 
+## Data Collection and Processing
+
+The `main()` function in the script handles the entire workflow:
+
+1. **Paper Extraction**: Uses multithreading to fetch papers for each subcategory via the OpenAlex API.
+2. **Classification**: Applies few-shot classification to categorize papers as 'Related' or 'Not Related'.
+3. **Data Processing**: Removes duplicates and organizes data into normalized tables.
+4. **Output Generation**: Saves the full dataset and creates sub-datasets for related papers.
+
+### Key Features
+- Concurrent paper extraction using `ThreadPoolExecutor`
+- Progress tracking with `tqdm`
+- Comprehensive error handling and logging
+- Flexible classification using custom few-shot learning model
+
 ## Dataset Structure
 
 ### Search Keywords
 The papers are collected using two categories of search terms:
 
-**Economics Keywords**
+**Economics Keywords** # related to psychology in different ways - not necessarily ecnomics
 - Poverty and Aspirations
 - Poverty and Time preference
 - Poverty and Risk preference

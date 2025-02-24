@@ -30,7 +30,7 @@ class RateLimiter:
         
         # If we've made too many requests in the last second, wait
         if len(self.window) >= self.requests_per_second:
-            sleep_time = 1 - (now - self.window[0]).total_seconds()
+            sleep_time = 2 - (now - self.window[0]).total_seconds()
             if sleep_time > 0:
                 time.sleep(sleep_time)
                 now = datetime.now()
@@ -84,37 +84,42 @@ def get_dois(works: List[str], session: requests.Session, rate_limiter: RateLimi
     dois = []
     base_url = "https://api.openalex.org/works"
 
-    # Process works in batches of 50 (reduced from 200 for better rate limiting)
-    for i in range(0, len(works), 50):
-        batch = works[i:i+50]
-        work_ids = [w.split('/')[-1] for w in batch]
-        filter_str = f"openalex:{('|').join(work_ids)}"
-        
+    # If works is a URL, extract the filter query
+    if isinstance(works, str) and works.startswith('https://api.openalex.org/works?filter=cites:'):
+        filter_str = works.split('filter=')[-1]
         try:
-            url = f"{base_url}?filter={filter_str}"
-            data = make_request(session, url, {}, rate_limiter)
-            
+            data = make_request(session, base_url, {'filter': filter_str}, rate_limiter)
             batch_dois = [work.get('doi') for work in data.get('results', []) if work.get('doi')]
             clean_dois = [doi.strip('https://doi.org/') for doi in batch_dois if doi]
             dois.extend(clean_dois)
-                
         except requests.RequestException as e:
-            logger.error(f"Error fetching batch: {e}")
+            logger.error(f"Error fetching citing works: {e}")
+    else:
+        # Process works in batches of 50 (reduced from 200 for better rate limiting)
+        for i in range(0, len(works), 50):
+            batch = works[i:i+50]
+            work_ids = [w.split('/')[-1] for w in batch]
+            filter_str = f"openalex:{('|').join(work_ids)}"
             
+            try:
+                url = f"{base_url}?filter={filter_str}"
+                data = make_request(session, url, {}, rate_limiter)
+                
+                batch_dois = [work.get('doi') for work in data.get('results', []) if work.get('doi')]
+                clean_dois = [doi.strip('https://doi.org/') for doi in batch_dois if doi]
+                dois.extend(clean_dois)
+                    
+            except requests.RequestException as e:
+                logger.error(f"Error fetching batch: {e}")
+                
     return dois
 
 def clean_abstract(abstract_index: Union[Dict, str]) -> str:
     """
     Reconstructs an abstract from OpenAlex's inverted index format into readable text.
-    Args:
-        abstract_index (dict or str): Either a dictionary containing the inverted index
-            format from OpenAlex (word -> positions) or a plain text string.
-    Returns:
-        str: The reconstructed abstract text with words in correct order.
     """
     if not isinstance(abstract_index, dict):
         return abstract_index
-    # Use generator expression for memory efficiency
     word_positions = ((pos, word) 
                      for word, positions in abstract_index.items() 
                      if isinstance(positions, list)
@@ -144,7 +149,7 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
     rate_limiter = RateLimiter(requests_per_second=10)  # OpenAlex allows ~10 req/second
 
     try:
-        with ThreadPoolExecutor(max_workers=3) as executor: 
+        with ThreadPoolExecutor(max_workers=1) as executor: 
             while True:
                 try:
                     data = make_request(session, base_url, params, rate_limiter)
@@ -157,12 +162,9 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
                             return papers
                         
                         citing_works = work.get('cited_by_api_url', '')
-                        citing_works_stripped = [x.strip() for x in 
-                            citing_works.replace('works?filter=cites:', '').split(',')
-                            if x.strip()]
                         referenced_works = work.get('referenced_works', [])
                         
-                        future_citing = executor.submit(get_dois, citing_works_stripped, session, rate_limiter)
+                        future_citing = executor.submit(get_dois, citing_works, session, rate_limiter)
                         future_referenced = executor.submit(get_dois, referenced_works, session, rate_limiter)
                         futures.extend([future_citing, future_referenced])
                         
