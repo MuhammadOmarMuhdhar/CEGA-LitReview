@@ -410,6 +410,32 @@ def main():
             "Poverty and Risk preference": risk_preference
         }
 
+        sample_size = {
+            'Poverty and Anxiety': 800.0,
+            'Poverty and Aspirations': 250.0,
+            'Poverty and Attention': 700.0,
+            'Poverty and Beliefs': 160.0,
+            'Poverty and Cognition': 350.0,
+            'Poverty and Cognitive flexibility': 1540.0,
+            'Poverty and Cognitive function': 790.0,
+            'Poverty and Depression': 240.0,
+            'Poverty and Executive control': 580.0,
+            'Poverty and Fluid intelligence': 350.0,
+            'Poverty and Happiness': 100.0,
+            'Poverty and Internalized stigma': 360.0,
+            'Poverty and Memory': 100.0,
+            'Poverty and Mindset': 90.0,
+            'Poverty and Optimism': 280.0,
+            'Poverty and Risk preference': 310.0,
+            'Poverty and Stress': 180.0,
+            'Poverty and Time preference': 500.0,
+            'Poverty and locus of control': 370.0,
+            'Poverty and mental health': 160.0,
+            'Poverty and self concept': 860.0,
+            'Poverty and self esteem': 70.0,
+            'Poverty and self-efficacy': 750.0,
+            'Poverty and working memory': 80.0
+            }
         
         # Create output directory at start
         output_dir = "data/sample_data"
@@ -420,20 +446,22 @@ def main():
             # Fetch papers
             data = []
             with tqdm(total=len(sum(categories.values(), [])), desc="Extracting papers", position=1, leave=False) as pbar_extract:
-                with ThreadPoolExecutor(max_workers=3) as executor:
+                with ThreadPoolExecutor(max_workers=1) as executor:
                     futures = []
                     for category, subcategories in categories.items():
+                        
                         for subcategory in subcategories:
-                            future = executor.submit(openalex.extract_papers, category, subcategory, 40)
+                            subcategory_sample_size = int(sample_size[subcategory])
+                            future = executor.submit(openalex.extract_papers, category, subcategory, subcategory_sample_size)
                             futures.append((future, category, subcategory))
                     
                     for future, category, subcategory in futures:
                         try:
                             papers = future.result()
                             if papers:  # Check if papers is not empty
-                                for paper in papers:
-                                    paper['category'] = category
-                                    paper['keyword'] = subcategory
+                                # for paper in papers:
+                                #     paper['category'] = category
+                                #     paper['keyword'] = subcategory
                                 data.extend(papers)
                             pbar_extract.update(1)
                         except Exception as e:
@@ -448,9 +476,12 @@ def main():
             # Process and classify papers
             df = pd.DataFrame(data)
             df.drop_duplicates(subset="doi", inplace=True)
-            
+            df.dropna(subset=["abstract"], inplace=True)
+            df.reset_index(drop=True, inplace=True)
+            # df.to_csv(os.path.join(output_dir, "stratified_unclassified_sample_dataset.csv"), index=False)
+
             classified_data = {}
-            with tqdm(total=len(df['keyword'].unique()), desc="Classifying papers", position=1, leave=False) as pbar_classify:
+            with tqdm(total=len(df['keyword'].unique()), desc="Classifying papers") as pbar_classify:
                 for keyword in df['keyword'].unique():
                     keyword_df = df[df['keyword'] == keyword].reset_index(drop=True)
                     try:
@@ -458,18 +489,16 @@ def main():
                             classifications = few_shot.classify(
                                 texts=keyword_df['title'],
                                 examples=examples_mapping[keyword],
-                                confidence_threshold=0.2  
+                                confidence_threshold=0.2
                             )
-                            
                             keyword_df = pd.concat([keyword_df, classifications], axis=1)
                             classified_data[keyword] = keyword_df
-                        
                         pbar_classify.update(1)
                     except Exception as e:
                         logger.error(f"Error classifying {keyword}: {str(e)}")
                         pbar_classify.update(1)
 
-            pbar_main.update(1)
+                pbar_main.update(1)
 
             if not classified_data:
                 raise ValueError("No papers were successfully classified")

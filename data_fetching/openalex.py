@@ -149,7 +149,7 @@ def extract_papers(broad_field: str, keyword: str = "Psychology", limit: Optiona
     rate_limiter = RateLimiter(requests_per_second=10)  # OpenAlex allows ~10 req/second
 
     try:
-        with ThreadPoolExecutor(max_workers=1) as executor: 
+        with ThreadPoolExecutor(max_workers=3) as executor: 
             while True:
                 try:
                     data = make_request(session, base_url, params, rate_limiter)
