@@ -1,0 +1,5 @@
+{
+    "files.autoSave": "onFocusChange",
+    "workbench.colorTheme": "Visual Studio Dark",
+    "workbench.preferredDarkColorTheme": "Visual Studio Light"
+}
