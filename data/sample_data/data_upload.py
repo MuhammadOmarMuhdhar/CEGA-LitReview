@@ -9,12 +9,13 @@ from typing import Dict, List, Any
 import logging
 import traceback
 
-
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 sys.path.append(project_root)
 
 from data_fetching import openalex
 from classification_algos import few_shot
+from feature_engineering import encoder, topic_clusters, labels
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -410,80 +411,85 @@ def main():
             "Poverty and Risk preference": risk_preference
         }
 
-        sample_size = {
-            'Poverty and Anxiety': 800.0,
-            'Poverty and Aspirations': 250.0,
-            'Poverty and Attention': 700.0,
-            'Poverty and Beliefs': 160.0,
-            'Poverty and Cognition': 350.0,
-            'Poverty and Cognitive flexibility': 1540.0,
-            'Poverty and Cognitive function': 790.0,
-            'Poverty and Depression': 240.0,
-            'Poverty and Executive control': 580.0,
-            'Poverty and Fluid intelligence': 350.0,
-            'Poverty and Happiness': 100.0,
-            'Poverty and Internalized stigma': 360.0,
-            'Poverty and Memory': 100.0,
-            'Poverty and Mindset': 90.0,
-            'Poverty and Optimism': 280.0,
-            'Poverty and Risk preference': 310.0,
-            'Poverty and Stress': 180.0,
-            'Poverty and Time preference': 500.0,
-            'Poverty and locus of control': 370.0,
-            'Poverty and mental health': 160.0,
-            'Poverty and self concept': 860.0,
-            'Poverty and self esteem': 70.0,
-            'Poverty and self-efficacy': 750.0,
-            'Poverty and working memory': 80.0
-            }
+        sample_size = {'Poverty and Anxiety': 8024,
+                    'Poverty and Aspirations': 2508,
+                    'Poverty and Attention': 7021,
+                    'Poverty and Beliefs': 1605,
+                    'Poverty and Cognition': 3511,
+                    'Poverty and Cognitive flexibility': 15446,
+                    'Poverty and Cognitive function': 7924,
+                    'Poverty and Depression': 2407,
+                    'Poverty and Executive control': 5817,
+                    'Poverty and Fluid intelligence': 3511,
+                    'Poverty and Happiness': 1003,
+                    'Poverty and Internalized stigma': 3611,
+                    'Poverty and Memory': 1003,
+                    'Poverty and Mindset': 903,
+                    'Poverty and Optimism': 2808,
+                    'Poverty and Risk preference': 3109,
+                    'Poverty and Stress': 1805,
+                    'Poverty and Time preference': 5015,
+                    'Poverty and locus of control': 3711,
+                    'Poverty and mental health': 1605,
+                    'Poverty and self concept': 8626,
+                    'Poverty and self esteem': 702,
+                    'Poverty and self-efficacy': 7523,
+                    'Poverty and working memory': 802}
         
+        # Create output directory at start
         # Create output directory at start
         output_dir = "data/sample_data"
         os.makedirs(output_dir, exist_ok=True)
-        
-        # Main progress bar
-        with tqdm(total=2, desc="Overall Progress", position=0) as pbar_main:
-            # Fetch papers
+
+    
+        # Main progress bar for overall process tracking
+        with tqdm(total=3, desc="Overall Progress", position=0) as pbar_main:
+            #-----------------------------------------------------------------
+            # Step 1: Fetch papers using ThreadPoolExecutor
+            #-----------------------------------------------------------------
             data = []
             with tqdm(total=len(sum(categories.values(), [])), desc="Extracting papers", position=1, leave=False) as pbar_extract:
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     futures = []
+                    # Submit paper extraction tasks for each category and subcategory
                     for category, subcategories in categories.items():
-                        
                         for subcategory in subcategories:
                             subcategory_sample_size = int(sample_size[subcategory])
                             future = executor.submit(openalex.extract_papers, category, subcategory, subcategory_sample_size)
                             futures.append((future, category, subcategory))
                     
+                    # Process completed futures and collect results
                     for future, category, subcategory in futures:
                         try:
                             papers = future.result()
-                            if papers:  # Check if papers is not empty
-                                # for paper in papers:
-                                #     paper['category'] = category
-                                #     paper['keyword'] = subcategory
+                            if papers:  # Check if papers list is not empty
                                 data.extend(papers)
                             pbar_extract.update(1)
                         except Exception as e:
                             logger.error(f"Error processing {category} - {subcategory}: {str(e)}")
                             pbar_extract.update(1)  # Still update progress bar on error
 
-            pbar_main.update(1)
+            pbar_main.update(1)  # Update main progress after paper extraction
 
+            # Validate we have data to process
             if not data:
                 raise ValueError("No papers were extracted")
 
-            # Process and classify papers
+            #-----------------------------------------------------------------
+            # Step 2: Process and classify papers
+            #-----------------------------------------------------------------
+            # Create DataFrame and clean the data
             df = pd.DataFrame(data)
-            df.drop_duplicates(subset="doi", inplace=True)
-            df.dropna(subset=["abstract"], inplace=True)
-            df.reset_index(drop=True, inplace=True)
+            df.drop_duplicates(subset="doi", inplace=True)  # Remove duplicate papers
+            df.dropna(subset=["abstract"], inplace=True)    # Remove entries with missing abstracts
+            df.reset_index(drop=True, inplace=True)         # Reset index after filtering
             # df.to_csv(os.path.join(output_dir, "stratified_unclassified_sample_dataset.csv"), index=False)
 
+            # Classify papers by keyword using few-shot classification
             classified_data = {}
-            with tqdm(total=len(df['keyword'].unique()), desc="Classifying papers") as pbar_classify:
+            with tqdm(total=len(df['keyword'].unique()), desc="Relevance Classifier") as pbar_classify:
                 for keyword in df['keyword'].unique():
-                    keyword_df = df[df['keyword'] == keyword].reset_index(drop=True)
+                    keyword_df = df[df['keyword'] == keyword].reset_index(drop=True)  # Reset index for each keyword subset
                     try:
                         if not keyword_df.empty and keyword in examples_mapping:
                             classifications = few_shot.classify(
@@ -491,44 +497,89 @@ def main():
                                 examples=examples_mapping[keyword],
                                 confidence_threshold=0.2
                             )
+                            # Combine original data with classifications
                             keyword_df = pd.concat([keyword_df, classifications], axis=1)
                             classified_data[keyword] = keyword_df
                         pbar_classify.update(1)
                     except Exception as e:
                         logger.error(f"Error classifying {keyword}: {str(e)}")
-                        pbar_classify.update(1)
+                        pbar_classify.update(1)  # Update progress even on error
 
-                pbar_main.update(1)
+            pbar_main.update(1)  # Update main progress after classification
 
+            # Validate classification results
             if not classified_data:
                 raise ValueError("No papers were successfully classified")
 
-            # Save results
-            final_df = pd.concat(classified_data.values(), ignore_index=True)
+            #-----------------------------------------------------------------
+            # Step 3: Save results and process related papers
+            #-----------------------------------------------------------------
+            # Combine all classified data into a single DataFrame
+            final_df = pd.concat(classified_data.values(), ignore_index=True)  # Reset index during concatenation
             
-            # Save full dataset
+            # Save full dataset with all papers (related and unrelated)
             final_df.to_csv(os.path.join(output_dir, "full_sample_dataset.csv"), index=False)
             
-            # Process related papers
+            # Extract only related papers for further processing
             related_papers = final_df[final_df['label'] == 'Related'].copy()
+            related_papers.reset_index(drop=True, inplace=True)  # Reset index after filtering
+
+            # Generate UMAP embeddings from paper abstracts
+            umap_df = encoder.model(related_papers, 'abstract', random_state=42, umap_components=2)
+            umap_df.reset_index(drop=True, inplace=True)  # Reset index after UMAP encoding
+
+            # Perform topic clustering on UMAP embeddings
+            topics = topic_clusters.model(
+                umap_df, 
+                umap_columns=['UMAP1', 'UMAP2'],
+                n_clusters=10, 
+                random_state=42
+            )
+                        
+            # Combine related papers with their topic clusters
+            # Reset indices before concatenation to ensure proper alignment
+            topics = topics.reset_index(drop=True)
+            topics = pd.concat([related_papers, topics], axis=1)
             
+            # Aggregate topics by cluster
+            topics = topics.groupby('cluster').agg({
+                'title': lambda x: x.tolist(),
+                'UMAP1': 'median',
+                'UMAP2': 'median',
+                'cluster': 'count'
+            })
+
+            # Generate labels for topic clusters using external API
+            label = labels.model(topics, api_key='AIzaSyBh--yodf0z_4TyCaDyS9phjMLcFr7XbeE')
+            topics['label'] = label
+
+            # Combine DOIs with UMAP coordinates for later reference
+            umap_df_doi = pd.concat([related_papers['doi'], umap_df], axis=1)
+
+            pbar_main.update(1)  # Update main progress after topic modeling
+
+            # Process and save sub-datasets if related papers exist
             if not related_papers.empty:
-                # Create sub-datasets
+                # Create sub-datasets with relevant columns
                 publications = related_papers[['doi', 'title', 'link', 'abstract', 'date', 
                                             'publication', 'field', 'keyword', 'cited_by_count']].copy()
                 authors = related_papers[['doi', 'authors']].copy()
                 institutions = related_papers[['doi', 'institution', 'country']].copy()
                 citations = related_papers[['doi', 'cited_by_count', 'referenced_works', 
-                                         'citing_works']].copy()
-
-                # Save sub-datasets
+                                        'citing_works']].copy()
+                
+                # Save all sub-datasets to CSV files
                 publications.to_csv(os.path.join(output_dir, "publications.csv"), index=False)
                 authors.to_csv(os.path.join(output_dir, "authors.csv"), index=False)
                 institutions.to_csv(os.path.join(output_dir, "institutions.csv"), index=False)
                 citations.to_csv(os.path.join(output_dir, "citations.csv"), index=False)
+
+                # Save UMAP embeddings and topic clusters
+                umap_df_doi.to_csv(os.path.join(output_dir, "umap_df.csv"), index=False)
+                topics.to_csv(os.path.join(output_dir, "topic_clusters.csv"), index=False)
             else:
                 logger.warning("No related papers were found after classification")
-                    
+                        
     except Exception as e:
         logger.error(f"Error in main execution: {str(e)}\n{traceback.format_exc()}")
         raise
