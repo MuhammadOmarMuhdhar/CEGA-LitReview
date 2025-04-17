@@ -4,3 +4,7 @@ configurations
 Airtable 050522-Grid 2.csv
 analysis.ipynb
 data_viz_proj.ipynb
+analysis
+.streamlit
+data
+sample_data
