@@ -398,7 +398,7 @@ mechanisms = [
 ]
 
 # Initialize classifier
-classifier = StudyTypeClassifier("AIzaSyBTnTeS5XjN4eauA5YqU4BcuA6zX_HuGsE")
+classifier = StudyTypeClassifier("") # Input the API key here
 
 # Process all abstracts in batches of 10:
 abstracts = df['abstract'].tolist()
