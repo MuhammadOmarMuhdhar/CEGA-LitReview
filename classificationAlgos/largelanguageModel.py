@@ -11,7 +11,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class Classifier:
+class GeminiModel:
     def __init__(self, api_key, model_name="gemini-2.0-flash", batch_size=500):
         """
         Initialize the classifier with API key, model name, and batch size.
