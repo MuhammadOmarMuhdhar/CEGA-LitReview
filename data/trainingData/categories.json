@@ -1,0 +1,12 @@
+{
+    "Affective": ["Poverty and mental health", "Poverty and Depression", "Poverty and Anxiety", 
+                 "Poverty and Stress", "Poverty and Happiness"],
+    "Beliefs": ["Poverty and Beliefs", "Poverty and Internalized stigma", "Poverty and Mindset", 
+               "Poverty and self-efficacy", "Poverty and locus of control", "Poverty and self concept", 
+               "Poverty and self esteem", "Poverty and Optimism", "Poverty and Aspirations"],
+    "Cognitive function": ["Poverty and Cognitive function", "Poverty and Cognition", 
+                         "Poverty and Cognitive flexibility", "Poverty and Executive control", 
+                         "Poverty and Memory", "Poverty and working memory", "Poverty and Fluid intelligence", 
+                         "Poverty and Attention"],
+    "Preferences": ["Poverty and Time preference", "Poverty and Risk preference"]
+}

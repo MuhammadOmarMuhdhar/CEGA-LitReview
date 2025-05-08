@@ -1,0 +1,27 @@
+
+{
+"study_types":[
+    "Randomized controlled trial",
+    "Quasi-experimental",
+    "Cross-sectional",
+    "Longitudinal",
+    "Review",
+    "Regression",
+    "Qualitative",
+    "Experimental",
+    "Experimental study",
+    "Experimental design"
+], 
+"poverty_contexts":[
+    "Low resource level",
+    "Resource volatility",
+    "Physical environment",
+    "Social environment"
+],
+"mechanisms":[
+    "Anxiety", "Depression", "Happiness", "Stress",
+    "Aspirations", "Internalized stigma", "Mindset", "Self-efficacy", "Optimism",
+    "Attention", "Cognitive flexibility", "Executive control", "Memory", "Fluid intelligence",
+    "Time preference", "Risk preference"
+]
+}
