@@ -1,14 +1,18 @@
 import numpy as np
 from scipy.stats import gaussian_kde
 
-def model(df, x_col='UMAP1', y_col='UMAP2', resolution=100,
+def run(papers, resolution=100,
                         x_min=None, x_max=None, y_min=None, y_max=None):
     """Create density estimates for heatmap with error handling and fixed bounds"""
-    if len(df) < 10:
+    if len(papers) < 10:
         return None
     try:
-        x = df[x_col]
-        y = df[y_col]
+
+        umap_embeddings = [paper['umap_embedding'] for paper in papers]
+
+        x = [embedding[0] for embedding in umap_embeddings]
+        y = [embedding[1] for embedding in umap_embeddings]
+        
         # Add noise to prevent singular matrix
         x = x + np.random.normal(0, 0.0001, size=len(x))
         y = y + np.random.normal(0, 0.0001, size=len(y))
