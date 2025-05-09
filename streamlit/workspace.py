@@ -378,7 +378,7 @@ def main():
             # Create animated figure
             umap_titles = umap_df.merge(plot_df, on='doi', how='inner')
            
-            fig = heat_map.create_cumulative_visualization(plot_df = umap_titles, topic_clusters=clusters)
+            # fig = heat_map.create_cumulative_visualization(plot_df = umap_titles, topic_clusters=clusters)
 
             # Display the figure
             # st.plotly_chart(fig, use_container_width=True)
