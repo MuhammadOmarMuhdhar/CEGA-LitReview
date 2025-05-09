@@ -1,47 +1,118 @@
+import os
+import sys 
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.append(parent_dir)
+
 import streamlit as st
 import streamlit as st
 import pandas as pd
-import requests
-import sqlite3
+from data import main, googleSheets
 from datetime import datetime
+from dotenv import load_dotenv
+from streamlit_gsheets import GSheetsConnection
 import json
+
 
 # Set page config
 st.set_page_config(page_title="Database Updater", layout="wide")
-
-# Database connection function
-def connect_to_db():
-    conn = sqlite3.connect('your_database.db')
-    return conn
-
-# API connection function
-def fetch_api_data(api_url, params=None, headers=None):
-    try:
-        response = requests.get(api_url, params=params, headers=headers)
-        response.raise_for_status()  # Raise an exception for 4XX/5XX responses
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"API Error: {e}")
-        return None
-
-# Function to update database with API data
-def update_database(data, table_name):
-    if not data:
-        return False, "No data to update"
-    
-    try:
-        conn = connect_to_db()
-        df = pd.DataFrame(data)
-        df.to_sql(table_name, conn, if_exists='replace', index=False)
-        conn.close()
-        return True, f"Successfully updated {len(df)} records in {table_name}"
-    except Exception as e:
-        return False, f"Database error: {str(e)}"
-
 # Streamlit UI
-st.title("API to Database Updater")
 
+# Load environment variables from .env file
+load_dotenv()
 
+# Fetch API key from environment variables
+api_key = os.getenv("GEMINI_API_KEY")
+
+# Load Google Sheets credentials from environment variables
+type= os.getenv("type")
+project_id = os.getenv("project_id")
+private_key_id = os.getenv("private_key_id") 
+private_key = os.getenv("private_key").replace("\\n", "\n")  
+client_email = os.getenv("client_email")
+client_id = os.getenv("client_id")
+auth_uri = os.getenv("auth_uri")
+token_uri = os.getenv("token_uri")
+auth_provider_x509_cert_url = os.getenv("auth_provider_x509_cert_url")
+client_x509_cert_url= os.getenv("client_x509_cert_url")
+universe_domain= os.getenv("universe_domain")
+credenetials = {
+    "type": type,
+    "project_id": project_id,
+    "private_key_id": private_key_id,
+    "private_key": private_key,
+    "client_email": client_email,
+    "client_id": client_id,
+    "auth_uri": auth_uri,
+    "token_uri": token_uri,
+    "auth_provider_x509_cert_url": auth_provider_x509_cert_url,
+    "client_x509_cert_url": client_x509_cert_url,
+    "universe_domain": universe_domain
+}
+# Load Google Sheets IDs from environment variables
+papers_spreadsheet_id = os.getenv("papers_spreadsheet_id")
+density = os.getenv("density")
+density_X = os.getenv("X")
+density_Y = os.getenv("Y")
+topics_spreadsheet_id = os.getenv("topics_spreadsheet_id")
+
+# Initialize the data extractor
+data_extractor = main.Extract(
+    api_key = api_key,
+    limit = 1
+)
+
+# Connect to Google Sheets
+google_sheets = googleSheets.API(
+    credentials_json=credenetials)
+
+def load_data():
+
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        papers_url = 'https://docs.google.com/spreadsheets/d/1nrZC6zJ50DouMCHIWZOl-tQ4BAZfEojJymtzUh26nP0/edit?usp=sharing'
+        topics_url = 'https://docs.google.com/spreadsheets/d/1cspghq8R0Xlf2jk0TacGv8bC6C4EGIUnGuUQJWYASpk/edit?usp=sharing'
+
+        papers_df = conn.read(spreadsheet = papers_url)
+        topics_df = conn.read(spreadsheet= topics_url)
+
+        return papers_df, topics_df
+
+# enter username password otherwise page isnt authorized
+if 'authenticated' not in st.session_state:
+    st.session_state['authenticated'] = False
+
+if not st.session_state['authenticated']:
+
+    col1, col2, col3 = st.columns([1, 4, 1])
+
+    with col2:
+        with st.expander("Login", expanded=True):
+
+            st.markdown("  ")
+            st.markdown("  ")
+            
+
+            st.write("This page is protected. Please enter credentials to access.")
+
+            st.markdown("  ")
+
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+
+            st.markdown("  ")
+            
+            if st.button("Login"):
+                if username == os.getenv("USERNAME") and password == os.getenv("PASSWORD"):
+                    st.session_state['authenticated'] = True
+                    st.success("Logged in successfully")
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password")
+
+            st.markdown("  ")
+            st.markdown("  ")
+    
+    st.stop()
+           
 
 # Main content
 tab1, tab2, tab3 = st.tabs(["Update Database", "View Data", "Logs"])
@@ -52,81 +123,79 @@ with tab1:
     col1, col2 = st.columns(2)
     
     with col1:
+
+        start_date = st.date_input("Start Date", datetime.today())
+        end_date = st.date_input("End Date", datetime.today())
+
         if st.button("Fetch Data From API", type="primary"):
-            st.info("Curretny not implemented")
-            # with st.spinner("Fetching data from API..."):
-            #     api_data = fetch_api_data(api_url, params, headers, )
+            with st.spinner("Fetching data..."):
+                formatted_start_date = start_date.strftime("%Y-%m-%d")
+                formatted_end_date = end_date.strftime("%Y-%m-%d")
                 
-            #     if api_data:
-            #         st.session_state['api_data'] = api_data
-            #         st.success(f"Successfully fetched data from API. Found {len(api_data if isinstance(api_data, list) else api_data.get('results', []))} records.")
-                    
-            #         # Display preview
-            #         st.subheader("Data Preview")
-            #         if isinstance(api_data, list):
-            #             st.dataframe(pd.DataFrame(api_data).head())
-            #         else:
-            #             # Handle nested API responses
-            #             if 'results' in api_data:
-            #                 st.dataframe(pd.DataFrame(api_data['results']).head())
-            #             else:
-            #                 st.json(api_data)
-    
-    with col2:
-        if st.button("Update Database", type="primary", disabled='api_data' not in st.session_state):
-            if 'api_data' in st.session_state:
-                with st.spinner("Updating database..."):
-                    data_to_update = st.session_state['api_data']
-                    if not isinstance(data_to_update, list) and 'results' in data_to_update:
-                        data_to_update = data_to_update['results']
-                        
-                    success, message = update_database(data_to_update, table_name)
-                    
-                    if success:
-                        st.success(message)
-                        
-                        # Add to logs
-                        if 'logs' not in st.session_state:
-                            st.session_state['logs'] = []
-                        
-                        st.session_state['logs'].append({
-                            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            'action': "Database Update",
-                            'status': "Success",
-                            'message': message
-                        })
-                    else:
-                        st.error(message)
-            else:
-                st.warning("Please fetch data from API first")
-
-with tab2:
-    st.header("View Current Database Data")
-    
-    if st.button("Load Database Data"):
-        st.info("Currently not implemented")
-        # try:
-        #     conn = connect_to_db()
-        #     query = f"SELECT * FROM {table_name}"
-        #     df = pd.read_sql_query(query, conn)
-        #     conn.close()
+                density, clusters, papers = data_extractor.run(
+                    start_date=formatted_start_date, end_date=formatted_end_date
+                )
             
-        #     if not df.empty:
-        #         st.dataframe(df)
-                
-        #         # Download option
-        #         csv = df.to_csv(index=False)
-        #         st.download_button(
-        #             label="Download as CSV",
-        #             data=csv,
-        #             file_name=f"{table_name}_export.csv",
-        #             mime="text/csv"
-        #         )
-        #     else:
-        #         st.info(f"No data found in table '{table_name}'")
-        # except Exception as e:
-        #     st.error(f"Error loading data: {str(e)}")
+            papers_df = pd.DataFrame(papers)
+            df_x = pd.DataFrame(density['x'])
+            df_y = pd.DataFrame(density['y'])
+            df_density = pd.DataFrame({
+                'x_flat': density['x_flat'],
+                'y_flat': density['y_flat'],
+                'density': density['density_flat']
+            })
+            clusters_df = pd.DataFrame(clusters)
 
+            # Save data to Google Sheets
+            google_sheets.append(
+                df=papers_df,
+                spreadsheet_id=papers_spreadsheet_id,
+                sheet_name='Sheet1',
+                include_headers=True
+            )
+
+            google_sheets.replace(
+                df=df_x,
+                spreadsheet_id=density,
+                sheet_name='Sheet1',
+                include_headers=True
+            )
+
+            google_sheets.replace(
+                df=df_y,
+                spreadsheet_id=density,
+                sheet_name='Sheet1',
+                include_headers=True
+            )
+
+            google_sheets.replace(
+                df=df_density,
+                spreadsheet_id=density,
+                sheet_name='Sheet1',
+                include_headers=True
+            )
+
+            google_sheets.replace(
+                df=clusters_df,
+                spreadsheet_id=topics_spreadsheet_id,
+                sheet_name='Sheet1',
+                include_headers=True
+            )
+            st.success("Data fetched successfully!")
+           
+with tab2:
+    
+    papers_df, topics_df = load_data()
+    st.dataframe(papers_df[['doi', 'title', 'authors', 'abstract', 'country', 'institution', 'study_type', 'poverty_context', 'mechanism']], use_container_width=True)
+
+    # button to reload with st.rerun
+    if st.button("Reload Data"):
+        with st.spinner("Reloading data..."):
+            papers_df, topics_df = load_data()
+            st.rerun()
+
+
+   
 with tab3:
     st.header("Operation Logs")
     
