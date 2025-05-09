@@ -1,3 +1,45 @@
+import streamlit as st
+
+
+
+# enter username password otherwise page isnt authorized
+if 'authenticated' not in st.session_state:
+    st.session_state['authenticated'] = False
+
+if not st.session_state['authenticated']:
+
+    col1, col2, col3 = st.columns([1, 4, 1])
+
+    with col2:
+        with st.expander("Login", expanded=True):
+
+            st.markdown("  ")
+            st.markdown("  ")
+            
+
+            st.write("This page is protected. Please enter credentials to access.")
+
+            st.markdown("  ")
+
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+
+            st.markdown("  ")
+            
+            if st.button("Login"):
+                if username == "PLACEHODLER" and password =="PLACEHODLER":
+                    st.session_state['authenticated'] = True
+                    st.success("Logged in successfully")
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password")
+
+            st.markdown("  ")
+            st.markdown("  ")
+    
+    st.stop()
+
+
 import os
 import sys 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -6,13 +48,25 @@ sys.path.append(parent_dir)
 import streamlit as st
 import streamlit as st
 import pandas as pd
-from data import main, googleSheets
+from data import googleSheets, main
 from datetime import datetime
 from dotenv import load_dotenv
 from streamlit_gsheets import GSheetsConnection
 import json
 
 
+
+
+def load_data():
+
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        papers_url = 'https://docs.google.com/spreadsheets/d/1nrZC6zJ50DouMCHIWZOl-tQ4BAZfEojJymtzUh26nP0/edit?usp=sharing'
+        topics_url = 'https://docs.google.com/spreadsheets/d/1cspghq8R0Xlf2jk0TacGv8bC6C4EGIUnGuUQJWYASpk/edit?usp=sharing'
+
+        papers_df = conn.read(spreadsheet = papers_url)
+        topics_df = conn.read(spreadsheet= topics_url)
+
+        return papers_df, topics_df
 # Set page config
 st.set_page_config(page_title="Database Updater", layout="wide")
 # Streamlit UI
