@@ -17,7 +17,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # Add the parent directory to the Python module search path
 sys.path.append(parent_dir)
 from visuals import heat_map, bar
-from feature_engineering import encoder, topic_clusters, labels
+from featureEngineering import encoder, labels, topicClusters
 
 
 
@@ -381,7 +381,35 @@ def main():
             fig = heat_map.create_cumulative_visualization(plot_df = umap_titles, topic_clusters=clusters)
 
             # Display the figure
-            st.plotly_chart(fig, use_container_width=True)
+            # st.plotly_chart(fig, use_container_width=True)
+
+            # write palceholder text, until code is ready
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("  ")
+            st.markdown("### Placeholder, visual is currently being refactored")
 
         with col2:
 
