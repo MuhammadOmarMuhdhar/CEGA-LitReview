@@ -92,7 +92,8 @@ def run(papers,
         # Assign both embeddings back to papers
         for idx, paper_idx in enumerate(valid_indices):
             papers[paper_idx]['embedding'] = original_embeddings_list[idx]
-            papers[paper_idx]['umap_embedding'] = umap_embeddings_list[idx]
+            papers[paper_idx]['UMAP1'] = umap_embeddings_list[idx][0]
+            papers[paper_idx]['UMAP2'] = umap_embeddings_list[idx][1]
     
     return papers
 
