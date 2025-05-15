@@ -5,7 +5,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
-from feature_engineering import density
+from featureEngineering import density
 
 def create_cumulative_visualization(plot_df, topic_clusters):
     """
@@ -86,11 +86,11 @@ def create_cumulative_visualization(plot_df, topic_clusters):
             continue
         
         if density_result is not None:
-            # Reduce number of contour levels for performance
+            # Contour levels
             contour_levels = max(10, min(15, int(len(core_data) / 100)))
             contour_size = (density_result['density'].max() - density_result['density'].min()) / contour_levels
             
-            # Contour trace with reduced complexity
+            # Contour trace
             contour = go.Contour(
                 x=np.unique(density_result['x']),
                 y=np.unique(density_result['y']),
@@ -138,7 +138,7 @@ def create_cumulative_visualization(plot_df, topic_clusters):
                 hovertext=core_data['title'],
                 hoverinfo='text',
                 marker=dict(
-                    size=2,
+                    size=3,
                     color='rgba(255, 255, 255, 0.3)'
                 ),
                 visible=False
@@ -196,7 +196,7 @@ def create_cumulative_visualization(plot_df, topic_clusters):
     # Configure layout
     fig.update_layout(
         sliders=[dict(
-            active=len(valid_dates) - 1,  # Set active to the last/most recent date
+            active=max(0 ,len(valid_dates) - 1),  # Set active to the last/most recent date
             currentvalue={"prefix": "Year: "},
             pad={"t": 50},
             steps=steps
