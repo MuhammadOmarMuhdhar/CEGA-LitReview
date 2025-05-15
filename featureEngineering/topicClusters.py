@@ -19,11 +19,25 @@ def run(papers,
     Returns:
         tuple: A set of unique cluster labels and the updated list of papers with cluster assignments.
     """
-    # Make a copy of the papers list to avoid modifying the original data
-    papers_copy = papers.copy()
 
-    # Extract UMAP embeddings from the papers
-    umap_embeddings = [paper['umap_embedding'] for paper in papers_copy]   
+    # Create a list of valid papers with same filtering criteria
+    def is_valid_number(val):
+        try:
+            float(val)
+            return True
+        except (ValueError, TypeError):
+            return False
+    
+    valid_papers = [paper for paper in papers if is_valid_number(paper.get('UMAP1')) and is_valid_number(paper.get('UMAP2'))]
+
+    # Extract embeddings only from valid papers
+    x = [float(paper['UMAP1']) for paper in valid_papers]
+    if len(x) < 2:
+        raise ValueError("Not enough valid data points for clustering")
+    y = [float(paper['UMAP2']) for paper in valid_papers]
+    umap_embeddings = np.array(list(zip(x, y)))
+
+  
     
     # Apply K-means clustering to the UMAP embeddings
     kmeans = KMeans(
@@ -31,13 +45,12 @@ def run(papers,
         random_state=random_state, 
         n_init=10  # Recommended default to avoid warnings
     )
-    
-    # Predict cluster labels for each paper
-    clusters = kmeans.fit_predict(umap_embeddings)
 
-    # Add the cluster assignments back to the papers dictionary
-    for i, paper in enumerate(papers_copy):
+      # Now assign clusters only to valid papers
+    clusters = kmeans.fit_predict(umap_embeddings)
+    for i, paper in enumerate(valid_papers):
         paper['cluster'] = clusters[i]
+
     
     # Return the set of unique cluster labels and the updated papers list
-    return set(clusters), papers_copy
+    return set(clusters), papers
