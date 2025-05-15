@@ -12,14 +12,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class GeminiModel:
-    def __init__(self, api_key, model_name="gemini-2.0-flash", batch_size=500):
+    def __init__(self, api_key, batch_size, model_name="gemini-2.0-flash"):
         """
-        Initialize the classifier with API key, model name, and batch size.
-        
-        Args:
-            api_key: API key for Gemini model
-            model_name: Name of the model to use
-            batch_size: Number of abstracts to process in each batch
         """
         self.api_key = api_key
         self.batch_size = batch_size
@@ -60,12 +54,17 @@ class GeminiModel:
         
         For each abstract, provide the classification in the format:
         Study Type, Poverty Context, Mechanism
+
         
         Guidelines:
         1. Focus ONLY on identifying the study type used in each specific abstract
         2. Do not consider other studies mentioned in the abstracts
-        3. If an abstract doesn't clearly describe its own study design, poverty context, or mechanism, respond with "Insufficient info"
+        3. If an abstract doesn't clearly describe its own study design, poverty context, or mechanism, respond with "Insufficient info".
         4. Look for specific methodological details that indicate the study type
+        5. Each classification can have multiple values, separated by commas
+        6. An abstract can belong to MULTIPLE categories - use comma-separated values when applicable
+        7. If poverty context is 'Low resource level', you have to pair it with another poverty context
+        7. Use "Insufficient info" ONLY when absolutely necessary, when in doubt, include the classification rather than marking as insufficient
         
         Study Type Definitions:
         {study_types}
