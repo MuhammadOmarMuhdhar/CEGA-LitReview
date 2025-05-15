@@ -16,7 +16,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 # Add the parent directory to the Python module search path
 sys.path.append(parent_dir)
-from visuals import heat_map, bar
+from visuals import heat_map, bar, sankey
 from featureEngineering import encoder, labels, topicClusters
 
 
@@ -31,74 +31,92 @@ def main():
     def load_data():
 
         conn = st.connection("gsheets", type=GSheetsConnection)
-        publications_url = 'https://docs.google.com/spreadsheets/d/1hCEGlef7wNGi1mk7jBLYfGz8mgw0kBJS78UUEd11sGU/edit?usp=sharing'
-        context_url = 'https://docs.google.com/spreadsheets/d/12JzU4gqCwwNIhD646m8daMHXmsYQ7YMKHMwKbn1o75A/edit?usp=sharing'
-        mechanisms_url = 'https://docs.google.com/spreadsheets/d/1b0bNul7tbueTFx2JU9t5lyfAnYzxQYef59UarfpIVD0/edit?usp=sharing'
-        institutions_url = 'https://docs.google.com/spreadsheets/d/16hm7heBfiCLKI-PNXUOaGZLVtNoDWP4UrRbCA4_K_Qs/edit?usp=sharing'
-        authors_url = 'https://docs.google.com/spreadsheets/d/1bC4R3-qoG2jd1QYU1UOIucA-fDQM71_fhjo72p24WjU/edit?usp=sharing'
-        citations_url = 'https://docs.google.com/spreadsheets/d/1iqbtpc7O4DsUd4my9YAAlAEzGhHIfASVyEXiB4VrEpk/edit?usp=sharing'
-        umap_df_url = 'https://docs.google.com/spreadsheets/d/13qrr95xnBanScDrW4qWYxumJW1s6pJbxZ8wz-0IIuyo/edit?usp=sharing'
-        clusters_url = 'https://docs.google.com/spreadsheets/d/1tIDFq2aF_3Cc4nlRuXQ7hkDjrLYqbZxyQSGKxqtWezU/edit?gid=308545453#gid=308545453'
+        papers_url = 'https://docs.google.com/spreadsheets/d/1nrZC6zJ50DouMCHIWZOl-tQ4BAZfEojJymtzUh26nP0/edit?usp=sharing'
+        topics_url = 'https://docs.google.com/spreadsheets/d/1cspghq8R0Xlf2jk0TacGv8bC6C4EGIUnGuUQJWYASpk/edit?usp=sharing'
 
-        publications = conn.read(spreadsheet = publications_url)
-        context = conn.read( spreadsheet = context_url)
-        mechanisms = conn.read(spreadsheet=mechanisms_url)
-        institutions = conn.read(spreadsheet=institutions_url)
-        authors = conn.read(spreadsheet=authors_url)
-        citations = conn.read(spreadsheet=citations_url)
-        umap_df = conn.read(spreadsheet=umap_df_url)
-        clusters = conn.read(spreadsheet=clusters_url)
+        papers_df = conn.read(spreadsheet = papers_url)
+        topics_df = conn.read(spreadsheet= topics_url)
 
-        return publications, context, mechanisms, institutions, authors, citations, umap_df, clusters
+        return papers_df, topics_df
 
-    # Load data
-    publications, context, mechanisms, institutions, authors, citations, umap_df, clusters = load_data()
-
+    papers_df, topics_df = load_data()
     # Set page title
-    st.title("Center for Effective Global Action Literature Review")
+    st.title(" Psychology of Poverty Literature Review Dashboard")
 
     # Create tabs for workspace functionalities
     tab1, tab2= st.tabs(["Introduction", "Dashboard" ])
 
     # Introduction Tab
     with tab1:
+       
        st.markdown("""
-
-            Research on the psychology and economics of poverty has emerged from diverse academic disciplines, each offering distinct perspectives and methodologies. However, these fields have often developed in isolation, leading to fragmented insights and limited interdisciplinary dialogue. This lack of integration makes it challenging to develop a comprehensive understanding of poverty and its multifaceted effects.  
-
-            To address this issue, we have developed an **interactive literature review tool** that enables researchers, policymakers, and practitioners to explore, analyze, and synthesize knowledge from a growing body of research. 
-
-            ###### Key Features of Our Tool:  
-
-            - **Research Exploration:** An interactive platform that allows users to navigate research findings in an intuitive manner.  
-            - **Data Visualization:**  Visualizations that help users identify trends, patterns, and gaps in the literature.
-            - **Continuous Updates:** Designed to evolve, incorporating new studies and findings as they emerge.  
-
-                    
-            ### Our Mission  
-
-            We aim to enhance the understanding of how poverty-related research is structured, supporting evidence-based decision-making and providing a robust foundation for researchers and practitioners working to design effective interventions.  
-
-            This project is being developed by the **Center for Effective Global Action (CEGA) at Berkeley**.  
-
-            - To download the data, please click [here](https://docs.google.com/spreadsheets/d/1npkoU3RmhnKTSKsk_BbXerrSrHtbmyaPXcjO8YSJlUI/edit?gid=1950861456#gid=1950861456).
-            - If you are a researcher or project manager interested in adapting this tool for your field, visit the documentation tab to learn about the technology behind it and how to implement it in your research domain.
                    
-            """)
+                    Research on the psychological consequences of poverty has emerged from diverse academic disciplines, each offering distinct perspectives and methodologies. However, this research has often developed in isolation, leading to fragmented insights and limited interdisciplinary dialogue. This lack of integration makes it challenging to develop a comprehensive understanding of poverty and its multifaceted effects.
+
+                    To address this issue, we have developed an interactive literature review tool that enables researchers, policymakers, practitioners, and others interested to explore, analyze, and synthesize knowledge from this growing body of research.
+
+                    ### Key Features of Our Tool
+
+                    - **Research Exploration**: An interactive platform that allows users to navigate research findings in an intuitive manner.
+                    - **Data Visualization**: Visualizations that help users identify trends, patterns, and gaps in the literature.
+                    - **Continuous Updates**: Designed to evolve, incorporating new studies and findings as they emerge.
+
+                    ### Our Mission
+
+                    We aim to enhance the understanding of the psychological impacts of poverty and, when available, subsequent downstream impacts on behaviors in the real world. We seek to support evidence-based decision-making and provide a robust foundation for researchers and practitioners working to design effective interventions.
+
+                    This project is being developed by the **Psychology and Economics of Poverty Initiative (PEP)** at the **Center for Effective Global Action (CEGA)** at Berkeley.
+
+                    📥 [Click here to download the data](https://docs.google.com/spreadsheets/d/1npkoU3RmhnKTSKsk_BbXerrSrHtbmyaPXcjO8YSJlUI/edit?gid=1950861456#gid=1950861456)
+
+                    ---
+
+                    ### Research Team and Contact Info
+
+                    ##### Faculty
+                    - Supreet Kaur  
+                    - Mahesh Srinivasan  
+                    - Jiaying Zhao  
+                    - Ye Rang Park  
+                    - Yuen Ho  
+
+                    ##### Postdocs
+                    - Aarti Malik
+
+                    ##### Research Assistants
+                    - Jaysan Shah  
+                    - Mangai Sundaram  
+                    - Swathi Natarajan  
+
+                    ##### Dashboard Visualization Team
+                    - Muhammad Mudhar  
+                    - Shufan Pan  
+                    - Kristina Hallez  
+
+                    Special thanks to **Kellie Hogue** at UC Berkeley’s D-Lab and **Van Tran**.
+
+                    ---
+                    If you are a researcher or project manager interested in adapting this tool for your field, visit the **Documentation** tab to learn about the technology behind it and how to implement it in your research domain.
+
+                    Comments, questions, ideas: Kristina Hallez, Senior Research Manager, khallez@berkeley.edu
+                    
+                   
+
+         """)
+       
+       # add logo
+    # st.image("logo.png", width=200)
+
 
     # Understanding the Field Tab
     with tab2:
 
         # Introduction
         st.markdown("""
-            In this research landscape analysis, we offer a guided exploration of poverty research through an interactive dashboard. 
-            Our  dataset encompasses academic scholarship from diverse institutional sources across multiple geographic regions, providing a multifaceted lens into contemporary poverty studies.
-                        
-            Our goal is to map the intellectual terrain of poverty research in a manner that can be explored. 
-            Throuhg this exploration tool, we hop... illuminates significant scholarly contributions, trace emerging research trends, and reveals the structure of academic dialogue surrounding poverty alleviation and social development.
-            
-            This dashboard is as an exploration tool, enabling researchers, policymakers, and stakeholders to navigate complex scholarly insights. 
-            Through intuitive interfaces and sophisticated data visualization, users can drill down into research patterns, comparative analyses, and thematic connections that define the current understanding of poverty as a multidimensional global challenge.
+            Our dataset encompasses academic scholarship across diverse disciplines and institutional sources spanning multiple geographic regions, providing a multi-faceted lens into contemporary poverty studies.
+
+            Our goal is to map the intellectual terrain of poverty research in a manner that can be explored. Through this exploratory dashboard, we hope to illuminate significant scholarly contributions, trace emerging research trends, and encourage more interdisciplinary collaboration around poverty alleviation and social development.
+
             """)
 
         
@@ -110,8 +128,9 @@ def main():
         if 'selected_institution' not in st.session_state:
             st.session_state.selected_institution = 'All'
 
-        # Extract unique countries from data (removing None values)
-        country_filter = institutions.copy()
+        # Extract unique countries from data (removing None values)e
+        
+        country_filter = papers_df.copy()
         country_filter['country'] = country_filter['country'].apply(
             lambda x: list(dict.fromkeys([i for i in ast.literal_eval(x) if i is not None]))
         )
@@ -139,7 +158,7 @@ def main():
                     st.session_state.selected_country = selected_country
                 
                 # Start with the original data each time
-                working_df = institutions.copy()
+                working_df = papers_df.copy()
                 
                 # Apply country filter if not "All"
                 if selected_country != 'All':
@@ -173,7 +192,7 @@ def main():
                     ]
             
             # Filter publications based on the DOIs in the working dataframe
-            filtered_publications = publications[publications['doi'].isin(working_df['doi'].tolist())]
+            filtered_publications = papers_df[papers_df['doi'].isin(working_df['doi'].tolist())]
             
             # Display statistics based on filtered data
             with st.expander("Total Number of Papers", expanded=True):
@@ -191,7 +210,7 @@ def main():
             col3, col4 = st.columns(2)
             
             with col3:
-                with st.expander("Countries Represented", expanded=True):
+                with st.expander("Countries of Institutions Represented ", expanded=True):
                     # Calculate countries count based on current filter
                     if selected_country != 'All':
                         countries_count = 1  # If filtering by a specific country
@@ -233,183 +252,139 @@ def main():
                 institution_counts = exploded_institutions.groupby('institution').size().reset_index(name='count')
                 top_institutions = institution_counts.sort_values('count', ascending=False).head(10)
 
-                st.markdown("###### Top Research Institutions")
+                st.markdown("###### Research Institutions -  Number of Publications")
                 institution_figure = bar.create(top_institutions, x_column='institution', y_column='count', title=None, coord_flip=True, height= 345)
                 st.plotly_chart(institution_figure, use_container_width=True)
 
                 
 
-        st.markdown("#### Poverty Context and Psychological Mechanisms")
-        col1, col2 = st.columns([1  , 1.4])
-
-        with col1:  
- 
-            with st.expander("Filter by Context and Mechanism", expanded=True):
-                filter_dois = working_df['doi'].tolist()
-
-
-                # Filtering Section
-                filter_dois = working_df['doi'].tolist()
-                context = context[context['doi'].isin(filter_dois)]
-                context_filter = context.copy()
-                context_filter = context_filter['context'].explode().unique()
-                context_list = [str(context) for context in context_filter if context_filter is not None]
-                # st.write(context_list)
-
-
-                mechanisms = mechanisms[mechanisms['doi'].isin(filter_dois)]
-                mechanisms_filter = mechanisms.copy()
-                mechanisms_filter = mechanisms_filter['mechanisms'].explode().unique()
-                mechanisms_list = [str(mechanisms) for mechanisms in mechanisms_filter if mechanisms_filter is not None]
-                # st.write(mechanisms_list)
-
-                col3, col4 = st.columns(2)
-                with col3:
-                    selected_context = st.selectbox("Filter by Context", ['All'] + sorted(context_list))
-                    if selected_context != 'All':
-                        context = context[context['context'] == selected_context]
-                    elif selected_context == 'All':
-                        context = context.copy()
-
-                with col4:
-                    selected_mechanism = st.selectbox("Filter by Mechanism", ['All'] + sorted(mechanisms_list))
-                    if selected_mechanism != 'All':
-                        mechanisms = mechanisms[mechanisms['mechanisms'] == selected_mechanism]
-                    elif selected_mechanism == 'All':
-                        mechanisms = mechanisms.copy()
-
-                working_context = working_df.merge(context, on='doi', how='left')
-                # Then join mechanisms
-                context_mechanism = working_context.merge(mechanisms, on='doi', how='left')
-
-                if selected_context != 'All':
-                    context_mechanism = context_mechanism[context_mechanism['context'] == selected_context]
-
-                if selected_mechanism != 'All':
-                    context_mechanism = context_mechanism[context_mechanism['mechanisms'] == selected_mechanism]
-
-                context_sum = context_mechanism.groupby('context').size().reset_index(name='count')
-                mechanisms_sum = context_mechanism.groupby('mechanisms').size().reset_index(name='count')
- 
-            st.markdown("""
-
-                    Poverty Context includes factors like low resource levels (absolute, perceived, or relative), resource volatility (unpredictable shocks), the physical environment (violence, noise, neighborhood quality), and the social environment (stigma, discrimination, cultural norms).
-
-                    Psychological Mechanisms are mental processes shaped by poverty. Affective factors (anxiety, depression, stress) influence emotions. Beliefs about self-worth and aspirations affect motivation, while cognitive functions (memory, executive control) are hindered by poverty. Preferences, such as time and risk preferences, are shaped by immediate needs.
-
-                    """)
-            
-        with col2:
-            
-
-            link_counts = context_mechanism.groupby(['context', 'mechanisms']).size().reset_index(name='Count')
-
-            # Create node labels
-            unique_poverty_contexts = link_counts['context'].unique().tolist()
-            unique_mechanisms = link_counts['mechanisms'].unique().tolist()
-            all_labels = unique_poverty_contexts + unique_mechanisms
-
-            # Assign indices for Sankey nodes
-            label_to_index = {label: i for i, label in enumerate(all_labels)}
-
-            # Prepare data for Sankey diagram
-            source_indices = link_counts['context'].map(label_to_index).tolist()
-            target_indices = link_counts['mechanisms'].map(label_to_index).tolist()
-            values = link_counts['Count'].tolist()
-
-            # Create Sankey Diagram
-            fig = go.Figure(go.Sankey(
-                node=dict(
-                    pad=100,
-                    thickness=15,
-                    line=dict(color="black", width=0.5),
-                    label=all_labels
-                    # color="blue"  # Sets node fill color
-                ),
-                link=dict(
-                    source=source_indices,
-                    target=target_indices,
-                    value=values,
-                ),
-            ))
-
-            # Update text size and color for labels
-            fig.update_layout(
-                font=dict(size=14, color="black"),  # Changes font size and color for all text
-                width=1000,
-                height=450
-            )
-
-            # Show the figure
-            st.plotly_chart(fig, use_container_width=False) 
-
-        # st.write("Research Landscape")
-        st.markdown("#### Research Landscape")
+        st.markdown("#### Connecting Poverty Context, Psychological Mechanisms and Behavior")
         
-        filter_dois = context_mechanism['doi'].tolist()
-        plot_df = publications[publications['doi'].isin(filter_dois)]
+ 
+        with st.expander("Filter by Context and Mechanism", expanded=True):
+            # Initial filtering based on working_df
+            filter_dois = working_df['doi'].tolist()
+            filtered_papers = papers_df[papers_df['doi'].isin(filter_dois)]
+            # remove rows with 'Insufficient info' in poverty_context and drop None values and drop if values are less than 5
+            filtered_papers = filtered_papers[filtered_papers['poverty_context'].map(filtered_papers['poverty_context'].value_counts()) > 5]
+            filtered_papers = filtered_papers[filtered_papers['poverty_context'] != 'Insufficient info']
+            filtered_papers = filtered_papers[filtered_papers['poverty_context'].notnull()]
 
+            # remove rows with 'Insufficient info' in mechanism
+            filtered_papers = filtered_papers[filtered_papers['mechanism'].map(filtered_papers['mechanism'].value_counts()) > 5]
+            filtered_papers = filtered_papers[filtered_papers['mechanism'] != 'Insufficient info']
+            filtered_papers = filtered_papers[filtered_papers['mechanism'].notnull()]
+            # remove rows with 'Insufficient info' in study_type
+            filtered_papers = filtered_papers[filtered_papers['study_type'].map(filtered_papers['study_type'].value_counts()) > 5]
+            filtered_papers = filtered_papers[filtered_papers['study_type'] != 'Insufficient info']
+            filtered_papers = filtered_papers[filtered_papers['study_type'].notnull()]
+            
+            # Get unique values for dropdowns (excluding 'Insufficient info')
+            context_list = sorted([str(x) for x in filtered_papers[filtered_papers['poverty_context'] != 'Insufficient info']['poverty_context'].unique()])
+            mechanisms_list = sorted([str(x) for x in filtered_papers[filtered_papers['mechanism'] != 'Insufficient info']['mechanism'].unique()])
+            study_types_list = sorted([str(x) for x in filtered_papers[filtered_papers['study_type'] != 'Insufficient info']['study_type'].unique()])
+            
+            # Create multiselect filters
+            col3, col4, col5 = st.columns(3)
+            
+            with col3:
+                selected_contexts = st.multiselect(
+                    "Filter by Context", 
+                    context_list,
+                    default=[],  # Start with no selections (shows all)
+                    placeholder="Select one or more contexts"
+                )
+            
+            with col4:
+                selected_study_types = st.multiselect(
+                    "Filter by Study Type", 
+                    study_types_list,
+                    default=[],  # Start with no selections (shows all)
+                    placeholder="Select one or more study types"
+                )
+            
+            with col5:
+                selected_mechanisms = st.multiselect(
+                    "Filter by Mechanism", 
+                    mechanisms_list,
+                    default=[],  # Start with no selections (shows all)
+                    placeholder="Select one or more mechanisms"
+                )
+            
+            # Apply filters - if nothing selected, show all
+            if selected_contexts:
+                working_df = working_df[working_df['poverty_context'].isin(selected_contexts)]
+            
+            if selected_mechanisms:
+                working_df = working_df[working_df['mechanism'].isin(selected_mechanisms)]
+            
+            if selected_study_types:
+                working_df = working_df[working_df['study_type'].isin(selected_study_types)]
+            
+            # Create summaries
+            context_sum = working_df.groupby('poverty_context').size().reset_index(name='count')
+            mechanisms_sum = working_df.groupby('mechanism').size().reset_index(name='count')
+            
 
-        # st.markdown("###### Influential Papers")
+        col1, col2 = st.columns([1  , 6])
+
+        # with col1:  
+ 
+        #     st.markdown("""
+
+        #             Poverty Context includes factors like low resource levels (absolute, perceived, or relative), resource volatility (unpredictable shocks), the physical environment (violence, noise, neighborhood quality), and the social environment (stigma, discrimination, cultural norms).
+
+        #             Psychological Mechanisms are mental processes shaped by poverty. Affective factors (anxiety, depression, stress) influence emotions. Beliefs about self-worth and aspirations affect motivation, while cognitive functions (memory, executive control) are hindered by poverty. Preferences, such as time and risk preferences, are shaped by immediate needs.
+
+        #             """)
+            
+        # with col2:
+
+      
         
-        # col1, col2 = st.columns([1, 1])
-        # influential_papers = plot_df.sort_values('cited_by_count', ascending=False).head(5)  
 
-        # with col1:
+        # Create and display the Sankey diagram
+        sankey_fig = sankey.draw(working_df)
+        st.plotly_chart(sankey_fig, use_container_width=True)
 
-        # with st.expander("", expanded=True):
-        #     st.write(influential_papers[['doi','title']].reset_index(drop=True))
+        st.markdown("#### Research Landscape Visualized")
 
+        
         col1, col2 = st.columns([2, 1])
 
         with col1:
-            # with st.expander(" ", expanded=True):
+            with st.spinner("Generating research landscape visualization..."):
+                plot_df = working_df.copy()
+                topics_df = topics_df.copy()
+                visual = heat_map.create_cumulative_visualization(plot_df, topics_df)
+                st.plotly_chart(visual, use_container_width=True)
+
+            st.markdown("""
+            This visualization maps the research landscape over time, revealing how academic topics cluster, evolve, and gain momentum. Use it to discover emerging research areas, track the changing focus of scholarly work, and identify influential research communities.
+            """)
+
+            col4, col5 = st.columns(2)
+            with col4:
+                st.markdown("""
+                **What it shows:**
+                - Each white dot = one research paper positioned by content (You can hover over it to see title)
+                - Color intensity = density of related research (Purple = sparse, bright yellow = concentrated)
+                - Spatial proximity = thematic similarity between papers
+                - White text labels = major research themes and topic clusters
+                - Overall layout = the intellectual landscape of the field
+            """)
+            with col5:
+                st.markdown("""
+                **How to use:**
+                - Drag the year slider to animate research evolution over time
+                - Hover over individual dots to see paper titles and details
+                - Observe clusters forming, growing, merging, or dissolving
+                - Identify research hotspots (bright yellow concentrations)
+                - Track how topics migrate and transform across the map
+                - Note emerging areas at the periphery moving toward the center
+                """)
 
 
-            # Normalize size_mean to range [0, 1]
-            clusters['size_mean'] = (clusters['cluster'] - clusters['cluster'].min()) / (clusters['cluster'].max() - clusters['cluster'].min())
-
-            # Scale to desired range, e.g., [10, 50]
-            min_size = 100
-            max_size = 200
-            clusters['size_mean'] = clusters['size_mean'] * (max_size - min_size) + min_size
-
-            clusters.rename(columns={'UMAP1': 'umap_1_mean', 'UMAP2': 'umap_2_mean'}, inplace=True)
-            # Create animated figure
-            umap_titles = umap_df.merge(plot_df, on='doi', how='inner')
-           
-            # fig = heat_map.create_cumulative_visualization(plot_df = umap_titles, topic_clusters=clusters)
-
-            # Display the figure
-            # st.plotly_chart(fig, use_container_width=True)
-
-            # write palceholder text, until code is ready
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("  ")
-            st.markdown("### Placeholder, visual is currently being refactored")
 
         with col2:
 
@@ -431,18 +406,58 @@ def main():
                 )
 
                 # seelct doi 
-                selected_doi = publications[publications['title'] == selected_paper]['doi'].values[0]
+                selected_doi = working_df[working_df['title'] == selected_paper]['doi'].values[0]
 
                 # create vertical table of paper, abstract, mechanism and context 
                 st.markdown("###### Paper Details")
                 # Display the selected paper's details
 
-                selected_paper_details = publications[publications['title'] == selected_paper].iloc[0]
+                authors = working_df[working_df['doi'] == selected_doi]['authors'].to_list()
+
+
+                authors = ast.literal_eval(authors[0])
+                authors = [author for author in authors if author != 'Insufficient info']
+                authors = ', '.join(authors)
+
+                context = working_df[working_df['doi'] == selected_doi]['poverty_context'].values
+                context = list(set(context))
+                context = [c for c in context if c != 'Insufficient info']
+                if len(context) > 1:
+                    context = ', '.join(context)
+                elif len(context) == 1:
+                    context = context[0]
+                else:
+                    context = "None"
+                    
+               
+
+                study_types = working_df[working_df['doi'] == selected_doi]['study_type'].values
+                study_types = [study for study in study_types if study != 'Insufficient info']
+                study_types = list(set(study_types))
+                if len(study_types) > 1:
+                    study_types = ', '.join(study_types)
+                elif len(study_types) == 1:
+                    study_types = study_types[0]
+                else:
+                    study_types = "None"
+
+                mechanisms = working_df[working_df['doi'] == selected_doi]['mechanism'].values
+                mechanisms = [m for m in mechanisms if m != 'Insufficient info']
+                mechanisms = list(set(mechanisms))
+                if len(mechanisms) > 1:
+                    mechanisms = ', '.join(mechanisms)
+                elif len(mechanisms) == 1:
+                    mechanisms = mechanisms[0]
+                else:
+                    mechanisms = "None"
+                
+
+                selected_paper_details = working_df[working_df['title'] == selected_paper].iloc[0]
                 st.markdown(f"**Title:** {selected_paper_details['title']}")
-                st.markdown(f"**Context:** {context[context['doi'] == selected_doi]['context'].values}")
-                st.markdown(f"**Mechanism:** {mechanisms[mechanisms['doi'] == selected_doi]['mechanisms'].values}")
-                selected_authors = authors[authors['doi'] == selected_doi]['authors'].to_list()
-                st.markdown(f"**Authors:** {', '.join(author for author in selected_authors)}")
+                st.markdown(f"**Context:** {context}")
+                st.markdown(f"**Mechanism:** {mechanisms}")
+                st.markdown(f"**Study Type:** {study_types}")
+                st.markdown(f"**Authors:** {authors}")
                 st.markdown(f"**Abstract:** {selected_paper_details['abstract']}")
               
 
