@@ -285,6 +285,8 @@ def main():
             context_df = filtered_papers.copy()
             context_df['poverty_context'] = context_df['poverty_context'].str.split(',')
             context_df = context_df.explode('poverty_context')
+            # remove leading and trailing spaces
+            context_df['poverty_context'] = context_df['poverty_context'].str.strip()
             context_list = sorted([str(x) for x in context_df[context_df['poverty_context'] != 'Insufficient info']['poverty_context'].unique()])
             context_list = context_df['poverty_context'].values
             context_list = list(set(context_list))
@@ -293,6 +295,7 @@ def main():
             mechanisms_df = filtered_papers.copy()
             mechanisms_df['mechanism'] = mechanisms_df['mechanism'].str.split(',')
             mechanisms_df = mechanisms_df.explode('mechanism')
+            # remove leading and trailing spaces
             mechanisms_df['mechanism'] = mechanisms_df['mechanism'].str.strip() 
             mechanisms_list = sorted([str(x) for x in mechanisms_df[mechanisms_df['mechanism'] != 'Insufficient info']['mechanism'].unique()]) 
             mechanisms_list = mechanisms_df['mechanism'].values     
@@ -301,6 +304,8 @@ def main():
             study_types_df = filtered_papers.copy()
             study_types_df['study_type'] = study_types_df['study_type'].str.split(',')
             study_types_df = study_types_df.explode('study_type')
+            # remove leading and trailing spaces
+            study_types_df['study_type'] = study_types_df['study_type'].str.strip()
             study_types_list = sorted([str(x) for x in study_types_df[study_types_df['study_type'] != 'Insufficient info']['study_type'].unique()])
             study_types_list = study_types_df['study_type'].values
             study_types_list = list(set(study_types_list))
