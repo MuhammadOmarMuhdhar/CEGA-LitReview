@@ -210,7 +210,7 @@ def main():
             col3, col4 = st.columns(2)
             
             with col3:
-                with st.expander("Countries of Institutions Represented ", expanded=True):
+                with st.expander("Countries of Institutions ", expanded=True):
                     # Calculate countries count based on current filter
                     if selected_country != 'All':
                         countries_count = 1  # If filtering by a specific country
