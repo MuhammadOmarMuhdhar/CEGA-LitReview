@@ -266,23 +266,45 @@ def main():
             filter_dois = working_df['doi'].tolist()
             filtered_papers = papers_df[papers_df['doi'].isin(filter_dois)]
             # remove rows with 'Insufficient info' in poverty_context and drop None values and drop if values are less than 5
-            filtered_papers = filtered_papers[filtered_papers['poverty_context'].map(filtered_papers['poverty_context'].value_counts()) > 5]
+            # filtered_papers = filtered_papers[filtered_papers['poverty_context'].map(filtered_papers['poverty_context'].value_counts()) ]
             filtered_papers = filtered_papers[filtered_papers['poverty_context'] != 'Insufficient info']
             filtered_papers = filtered_papers[filtered_papers['poverty_context'].notnull()]
 
             # remove rows with 'Insufficient info' in mechanism
-            filtered_papers = filtered_papers[filtered_papers['mechanism'].map(filtered_papers['mechanism'].value_counts()) > 5]
+            # filtered_papers = filtered_papers[filtered_papers['mechanism'].map(filtered_papers['mechanism'].value_counts()) > 5]
             filtered_papers = filtered_papers[filtered_papers['mechanism'] != 'Insufficient info']
             filtered_papers = filtered_papers[filtered_papers['mechanism'].notnull()]
             # remove rows with 'Insufficient info' in study_type
-            filtered_papers = filtered_papers[filtered_papers['study_type'].map(filtered_papers['study_type'].value_counts()) > 5]
+            # filtered_papers = filtered_papers[filtered_papers['study_type'].map(filtered_papers['study_type'].value_counts()) > 5]
             filtered_papers = filtered_papers[filtered_papers['study_type'] != 'Insufficient info']
             filtered_papers = filtered_papers[filtered_papers['study_type'].notnull()]
             
             # Get unique values for dropdowns (excluding 'Insufficient info')
-            context_list = sorted([str(x) for x in filtered_papers[filtered_papers['poverty_context'] != 'Insufficient info']['poverty_context'].unique()])
-            mechanisms_list = sorted([str(x) for x in filtered_papers[filtered_papers['mechanism'] != 'Insufficient info']['mechanism'].unique()])
-            study_types_list = sorted([str(x) for x in filtered_papers[filtered_papers['study_type'] != 'Insufficient info']['study_type'].unique()])
+            # explode dictionary by poverty_context
+
+            context_df = filtered_papers.copy()
+            context_df['poverty_context'] = context_df['poverty_context'].str.split(',')
+            context_df = context_df.explode('poverty_context')
+            context_list = sorted([str(x) for x in context_df[context_df['poverty_context'] != 'Insufficient info']['poverty_context'].unique()])
+            context_list = context_df['poverty_context'].values
+            context_list = list(set(context_list))
+            # extract value from inner list
+
+            mechanisms_df = filtered_papers.copy()
+            mechanisms_df['mechanism'] = mechanisms_df['mechanism'].str.split(',')
+            mechanisms_df = mechanisms_df.explode('mechanism')
+            mechanisms_df['mechanism'] = mechanisms_df['mechanism'].str.strip() 
+            mechanisms_list = sorted([str(x) for x in mechanisms_df[mechanisms_df['mechanism'] != 'Insufficient info']['mechanism'].unique()]) 
+            mechanisms_list = mechanisms_df['mechanism'].values     
+            mechanisms_list = list(set(mechanisms_list))       
+
+            study_types_df = filtered_papers.copy()
+            study_types_df['study_type'] = study_types_df['study_type'].str.split(',')
+            study_types_df = study_types_df.explode('study_type')
+            study_types_list = sorted([str(x) for x in study_types_df[study_types_df['study_type'] != 'Insufficient info']['study_type'].unique()])
+            study_types_list = study_types_df['study_type'].values
+            study_types_list = list(set(study_types_list))
+            
             
             # Create multiselect filters
             col3, col4, col5 = st.columns(3)
@@ -310,16 +332,34 @@ def main():
                     default=[],  # Start with no selections (shows all)
                     placeholder="Select one or more mechanisms"
                 )
+
+            working_df_exploded = working_df.copy()
+            working_df_exploded['poverty_context'] = working_df_exploded['poverty_context'].str.split(',')
+            working_df_exploded = working_df_exploded.explode('poverty_context')
+            # remove leading and trailing spaces
+            working_df_exploded['poverty_context'] = working_df_exploded['poverty_context'].str.strip()
+            working_df_exploded['mechanism'] = working_df_exploded['mechanism'].str.split(',')
+            working_df_exploded = working_df_exploded.explode('mechanism')
+            # remove leading and trailing spaces
+            working_df_exploded['mechanism'] = working_df_exploded['mechanism'].str.strip()
+            working_df_exploded['study_type'] = working_df_exploded['study_type'].str.split(',')
+            working_df_exploded = working_df_exploded.explode('study_type')
+            # remove leading and trailing spaces
+            working_df_exploded['study_type'] = working_df_exploded['study_type'].str.strip()
             
             # Apply filters - if nothing selected, show all
             if selected_contexts:
-                working_df = working_df[working_df['poverty_context'].isin(selected_contexts)]
+                working_df_exploded = working_df_exploded[working_df_exploded['poverty_context'].isin(selected_contexts)]
+                working_df = working_df[working_df['doi'].isin(working_df_exploded['doi'].tolist())]
+
             
             if selected_mechanisms:
-                working_df = working_df[working_df['mechanism'].isin(selected_mechanisms)]
+                working_df_exploded = working_df_exploded[working_df_exploded['mechanism'].isin(selected_mechanisms)]
+                working_df = working_df[working_df['doi'].isin(working_df_exploded['doi'].tolist())]
             
             if selected_study_types:
-                working_df = working_df[working_df['study_type'].isin(selected_study_types)]
+                working_df_exploded = working_df_exploded[working_df_exploded['study_type'].isin(selected_study_types)]
+                working_df = working_df[working_df['doi'].isin(working_df_exploded['doi'].tolist())]
             
             # Create summaries
             context_sum = working_df.groupby('poverty_context').size().reset_index(name='count')
@@ -344,7 +384,7 @@ def main():
         
 
         # Create and display the Sankey diagram
-        sankey_fig = sankey.draw(working_df)
+        sankey_fig = sankey.draw(working_df_exploded)
         st.plotly_chart(sankey_fig, use_container_width=True)
 
         st.markdown("#### Research Landscape Visualized")
@@ -428,9 +468,6 @@ def main():
                     context = context[0]
                 else:
                     context = "None"
-                    
-               
-
                 study_types = working_df[working_df['doi'] == selected_doi]['study_type'].values
                 study_types = [study for study in study_types if study != 'Insufficient info']
                 study_types = list(set(study_types))
