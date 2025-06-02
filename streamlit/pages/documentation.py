@@ -31,221 +31,186 @@ st.markdown("""
             """)
 
 
-tab1, tab2, tab3, tab4= st.tabs(["Data Sourcing & Processing", "Document Classification", "MISC 1", "MISC 2" ])
-
+tab1, tab2, tab3, tab4= st.tabs(["Sourcing Papers", "Google Sheets Database", "Data Dictionary", "MISC 2" ])
 
 
 
 with tab1:
-    # Page Title & Overview
-    st.markdown("### Data Collection from OpenAlex API")
-    st.markdown("""
-                
-    This section explains how our system sources, processes, and stores research papers. The workflow is broken into several steps—from API extraction to data normalization and storage.
-                
 
-    
-    """)
+   st.markdown(f"""
+    #### Sourcing Papers
 
-    # Supported APIs
-    st.markdown("#### 1. OpenAlex API")
-    st.markdown("""
-    Papers are sourced from the **OpenAlex API**, a comprehensive and freely accessible database that provides metadata on academic papers, journals, authors, and institutions.  
-                
-    - **Authentication:** Not required  
-    - **Rate Limits:**  
-      - 10 requests per second (burst limit)  
-      - 100,000 requests per 24-hour period  
-    - **Documentation:** [OpenAlex API Docs](https://docs.openalex.org)
-                
-    The papers are extracted based on a set of keywords, grouped into thematic categories. The categories cover various aspects of how poverty affects psychological and economic outcomes, including emotional health, beliefs, cognitive functions, and preferences.
-                
-    """)
+    We source our research papers through the **OpenAlex API**, a comprehensive and freely accessible academic database. This platform provides extensive metadata on over 200 million scholarly works, including research papers, authors, institutions, and journals across all academic disciplines.
 
-    # Search Keywords Overview
-    with st.expander("Search Keywords"):
-        
+    Our approach to literature collection leverages OpenAlex's search capabilities, allowing us to query papers by keywords, research fields, and publication timeframes. To maintain focus and relevance in poverty research, we've developed a carefully curated keyword taxonomy that guides our data collection process.
 
-        st.code('''{
-    "Affective": [
-        "Poverty and mental health",
-        "Poverty and Depression",
-        "Poverty and Anxiety",
-        "Poverty and Stress",
-        "Poverty and Happiness"
-    ],
-    "Beliefs": [
-        "Poverty and Beliefs",
-        "Poverty and Internalized stigma",
-        "Poverty and Mindset",
-        "Poverty and self-efficacy",
-        "Poverty and locus of control",
-        "Poverty and self concept",
-        "Poverty and self esteem",
-        "Poverty and Optimism",
-        "Poverty and Aspirations"
-    ],
-    "Cognitive function": [
-        "Poverty and Cognitive function",
-        "Poverty and Cognition",
-        "Poverty and Cognitive flexibility",
-        "Poverty and Executive control",
-        "Poverty and Memory",
-        "Poverty and working memory",
-        "Poverty and Fluid intelligence",
-        "Poverty and Attention"
-    ],
-    "Preferences": [
-        "Poverty and Time preference",
-        "Poverty and Risk preference"
-    ]
-}''', language='json')
+    **🔗 Explore our keyword categories:** [View on GitHub](https://github.com/MuhammadOmarMuhdhar/CEGA-LitReview/blob/main/data/trainingData/categories.json)
 
-    # Data Structure
-    st.markdown("#### 2. Data Structure")
-    st.markdown("Each research paper is extracted in JSON format with the following schema:")
-    st.code('''{
-    "doi": "string",          // Digital Object Identifier (unique)
-    "title": "string",        // Full academic paper title
-    "link": "string",         // URL to access the paper
-    "authors": ["string"],    // Array of author names
-    "keyword": "string",      // Search keyword used
-    "publication": "string",  // Journal or conference name
-    "country": "string",      // Country of publication (if available)
-    "date": "string",         // Publication year (YYYY format)
-    "field": "string",        // Primary academic discipline (e.g., psychology, economics)
-    "institution": "string",  // Affiliated research institution (if available)
-    "abstract": "string",     // Summary/abstract of the paper
-    "cited_by_count": "integer", // Total citation count
-    "citing_works": ["string"],  // DOIs of papers citing this work
-    "referenced_works": ["string"] // DOIs of works cited in this paper
-}''', language='json')
+    ##### About OpenAlex
+    - **Platform:** [https://openalex.org](https://openalex.org)
+    - **Documentation:** [https://docs.openalex.org](https://docs.openalex.org)
+    - **No authentication required** – completely open access
+    - **Generous rate limits:** 10 requests/second, 100,000 requests/24 hours
+    - **Rich data format:** Structured JSON responses with comprehensive metadata
 
-    # Search Keywords Details
-    
+    ##### Our Custom Scraper Solution
 
-    # Data Storage & Schema
-    st.markdown("#### 3. Data Storage & Schema")
-    st.markdown("To enable efficient cross-referencing, the dataset is normalized into multiple tables using the **DOI** as the primary key.")
+    To efficiently harvest literature at scale, we've built a scraper built on OpenAlex that automates the entire data collection process. This tool intelligently manages API interactions while ensuring data quality and completeness.
 
-    st.markdown("##### Authors Table")
-    st.markdown("""
-    | **DOI**    | **Authors**   |
-    |------------|---------------|
-    | "string"   | ["string"]    |
-    """)
+    **Key capabilities include:**
+    - **Smart rate limiting** using token bucket algorithms to respect API constraints
+    - **Robust error handling** with automatic retries for network issues and rate limit responses
+    - **Multithreaded processing** for faster data collection
+    - **Intelligent abstract reconstruction** when papers provide segmented text
+    - **Comprehensive metadata extraction** including titles, DOIs, abstracts, authors, and publication dates
+    - **Flexible filtering** by date ranges and keyword combinations
 
-    st.markdown("##### Citations Table")
-    st.markdown("""
-    | **DOI**    | **Cited By Count** | **Referenced Works** | **Citing Works**   |
-    |------------|--------------------|----------------------|--------------------|
-    | "string"   | "integer"          | ["string"]           | ["string"]         |
-    """)
+    **Quick start example:**
+    ```python
+    from openAlex import Scraper
 
-    st.markdown("##### Institutions Table")
-    st.markdown("""
-    | **DOI**    | **Institution** | **Country**  |
-    |------------|-----------------|--------------|
-    | "string"   | "string"        | "string"     |
-    """)
+    # Initialize the scraper
+    extractor = Scraper(requests_per_second=10, email="your_email@example.com")
 
-    st.markdown("##### Publications Table")
-    st.markdown("""
-    | **DOI**    | **Title**    | **Abstract**  | **Publication** | **Field**  | **Keyword**  |
-    |------------|--------------|---------------|-----------------|------------|--------------|
-    | "string"   | "string"     | "string"      | "string"        | "string"   | "string"     |
-    """)
+    # Collect papers matching your criteria
+    papers = extractor.run(
+        broad_field="Psychology",
+        keyword="cognitive",
+        start_date="2020-01-01",
+        end_date="2023-12-31",
+        limit=100
+    )
+    ```
+    [![GitHub](https://badgen.net/badge/icon/GitHub?icon=github&label)](https://github.com/MuhammadOmarMuhdhar/CEGA-LitReview/blob/main/data/openAlex.py)
 
-    # Usage Notes & Data Dictionary
-    st.markdown("#### 4. Usage Notes")
-    st.markdown("""
-    - **DOI** acts as the primary key to join data across tables.  
-    - Some fields (e.g., `country`, `institution`) might be missing in certain entries.  
-    - The citation network can be constructed using the `citing_works` and `referenced_works` arrays.  
-    - Publication dates are stored in the `YYYY` format.
-    """)
-
+    """, unsafe_allow_html=True)
+   
 with tab2:
-    
-   st.markdown("""
-### Classification Algorithms
-
-This document provides an overview of the classification algorithms implemented in this project, focusing on functionality, configuration, and usage.
-
-#### Implemented Algorithm
-
-- **Few-Shot Text Classification**  
-  A method leveraging sentence transformers for text embedding and K-Nearest Neighbors (KNN) for classification with minimal labeled examples.
-
------
-               
-#### Few-Shot Text Classification
-
-This module enables few-shot classification of text data by utilizing sentence embeddings from a pretained transformer model and a KNN-based classification approach.
-
-##### Dependencies
-
-- `pandas`
-- `numpy`
-- `sentence_transformers`
-- `scikit-learn`
-- `logging`
-- `typing`
-
-##### Classification Process
-
-1. **Model Loading**  
-   - Loads the specified sentence transformer model for embedding generation.  
-
-2. **Embedding Generation**  
-   - Converts both input texts and labeled examples into numerical embeddings.  
-
-3. **Batch Processing**  
-   - Handles large datasets efficiently by processing inputs in batches to prevent memory issues.  
-
-4. **Classification via KNN**  
-   - Fits a KNN classifier to the example embeddings.  
-   - Computes distances and retrieves the closest neighbors.  
-   - Assigns labels based on majority voting among neighbors.  
-
-6. **Confidence Filtering**  
-   - Filters results based on the confidence threshold.  
-   - If confidence falls below the threshold, the label is set to `None`.  
-
-##### Usage Example
-
-```python
-import pandas as pd
-from your_module import classify
-
-# Input texts
-texts = pd.Series([
-    "The government increased interest rates again.",
-    "Recent studies highlight the impact of meditation.",
-    "Quantum computing is advancing at a rapid pace."
-])
-
-# Few-shot examples
-# In practice, minimum 3 examples per label are recommended for robust classification. 
-examples = [
-    {"text": "Inflation rates and fiscal policies.", "label": "economics"},
-    {"text": "Cognitive behavioral therapy and mindfulness.", "label": "psychology"},
-    {"text": "Advancements in artificial intelligence and quantum computing.", "label": "technology"}
-]
-
-# Perform classification
-results = classify(texts, examples)
-
-# Display results
-print(results)
-               
-|                         text                         predicted_label | confidence |
-|-----------------------------------------------------|----------------|------------|
-| The government increased interest rates again.      | economics      | 0.87       |
-| Recent studies highlight the impact of meditation.  | psychology     | 0.92       |
-| Quantum computing is advancing at a rapid pace.     | technology     | 0.89       |
-
-
-""")
    
+   st.markdown(f"""
+    #### Google Sheets Database
+
+    We leverage **Google Sheets as our primary database** for storing and managing research papers collected from the OpenAlex API. This cloud-based approach provides real-time accessibility, collaborative editing capabilities, and seamless integration with our automated data collection pipeline.
+
+    Our system transforms Google Sheets into a powerful research database by automatically populating spreadsheets with paper metadata, abstracts, and bibliographic information. This eliminates manual data entry while maintaining the familiar spreadsheet interface that researchers prefer for data exploration and analysis.
+
+    ##### Why Google Sheets as a Database?
+
+    **Accessibility & Collaboration**
+    - **Real-time updates** from our automated scrapers
+    - **Multi-user access** for research teams
+    - **Cloud-based storage** with automatic backups
+    - **Familiar interface** that requires no technical expertise
+
+    **Integration Benefits**
+    - **Direct API connectivity** for automated data population
+    - **Flexible data structures** that adapt to varying paper formats
+    - **Built-in sharing and permissions** for research collaboration
+    - **Export capabilities** to multiple formats (CSV, Excel, PDF)
+               
+    ##### Authentication & Setup
+
+    To use our Google Sheets database system, you'll need to set up [**Google Cloud Service Account credentials**](https://cloud.google.com/iam/docs/service-account-creds). This enables secure, programmatic access to your Google Sheets without requiring manual authentication.
+
+
+    ##### Our Custom Google Sheets API Wrapper
+
+    To efficiently manage large-scale literature data, we've developed an API wrapper that handles the Google Sheets connection.
+
+    **Features:**
+    - **Intelligent batching** to handle large datasets efficiently while respecting Google's API limits
+    - **Automatic data type conversion** ensuring clean storage of complex paper metadata
+    - **Smart list handling** that converts author arrays and keyword lists to readable strings
+    - **Robust error handling** with comprehensive logging for debugging and monitoring
+    - **Rate limit management** to prevent API quota exhaustion during bulk operations
+    - **Flexible sheet management** including creation, replacement, and append operations
+
+    **Core Operations:**
+
+    **📝 Writing Papers to Sheets**
+    ```python
+    from googleSheets import API
+
+    # Initialize with your service account credentials
+    sheets_api = API(credentials_json)
+
+    # Replace entire sheet with new paper collection
+    results = sheets_api.replace(
+        df=papers_dataframe,
+        spreadsheet_id="your_sheet_id",
+        sheet_name="Literature_Review",
+        include_headers=True
+    )
+
+    # Append new papers to existing collection
+    results = sheets_api.append(
+        df=new_papers,
+        spreadsheet_id="your_sheet_id",
+        sheet_name="Recent_Papers"
+    )
+    ```
+
+    **📊 Reading Data for Analysis**
+    ```python
+    # Load papers for analysis
+    papers_df = sheets_api.read(
+        spreadsheet_id="your_sheet_id",
+        sheet_range="Literature_Review",
+        header_row=0
+    )
+    ```
+               
+    [![GitHub](https://badgen.net/badge/icon/GitHub?icon=github&label)](https://github.com/MuhammadOmarMuhdhar/CEGA-LitReview/blob/main/data/googleSheets.py)
    
+    """, unsafe_allow_html=True)
+   
+with tab3:
+   
+   st.markdown(f"""
+
+    #### Data Dictionary
+
+    This data dictionary describes the structure and content of each paper record stored in our Google Sheets database. Each row represents a single research paper with the following standardized fields:
+
+    ##### Core Paper Information
+
+    | Field | Type | Description | Example |
+    |-------|------|-------------|---------|
+    | `doi` | String | Digital Object Identifier without the URL prefix | `10.1037/dev0001234` |
+    | `title` | String | Full title of the research paper | `"Cognitive Development in Early Childhood"` |
+    | `abstract` | String | Paper abstract (cleaned and reconstructed from inverted index) | `"This study examines the relationship between..."` |
+
+    ##### Author & Institutional Data
+
+    | Field | Type | Description | Example |
+    |-------|------|-------------|---------|
+    | `authors` | List of Strings | All author names associated with the paper | `["John Smith", "Jane Doe", "Alex Johnson"]` |
+    | `country` | List of Strings | Country codes for each author's primary institution | `["US", "GB", "CA"]` |
+    | `institution` | List of Strings | Institution names for each author's primary affiliation | `["Harvard University", "Oxford University", "University of Toronto"]` |
+
+    ##### Metadata
+
+    | Field | Type | Description | Example |
+    |-------|------|-------------|---------|
+    | `date` | Integer | Year of publication | `2023` |
+    | `field` | String | Broad academic field category | `"Psychology"` |
+    | `keyword` | String | Search keyword used to find this paper | `"cognitive development"` |
+
+    ##### Citation Metrics
+
+    | Field | Type | Description | Example |
+    |-------|------|-------------|---------|
+    | `cited_by_count` | Integer | Number of times this paper has been cited | `45` |
+    | `citing_works` | Null | Future field for papers that cite this work | `null` |
+    | `referenced_works` | Null | Future field for papers referenced by this work | `null` |
+               
+    ##### Features
+
+    | Field | Type | Description | Example |
+    |-------|------|-------------|---------|
+    | `embeddings` | Array of Floats | High-dimensional vector representation of paper abstract | `[0.234, -0.567, 0.891, ...]` |
+    | `UMAP1` | Float | X-coordinate from UMAP dimensionality reduction of sentence embeddings | `-2.345` |
+    | `UMAP2` | Float | Y-coordinate from UMAP dimensionality reduction of sentence embeddings | `1.678` |
+
+
+        """, unsafe_allow_html=True)
