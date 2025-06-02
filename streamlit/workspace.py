@@ -34,14 +34,14 @@ def main():
 
         conn = st.connection("gsheets", type=GSheetsConnection)
         papers_url = 'https://docs.google.com/spreadsheets/d/1nrZC6zJ50DouMCHIWZOl-tQ4BAZfEojJymtzUh26nP0/edit?usp=sharing'
-        topics_url = 'https://docs.google.com/spreadsheets/d/1cspghq8R0Xlf2jk0TacGv8bC6C4EGIUnGuUQJWYASpk/edit?usp=sharing'
+        # topics_url = 'https://docs.google.com/spreadsheets/d/1cspghq8R0Xlf2jk0TacGv8bC6C4EGIUnGuUQJWYASpk/edit?usp=sharing'
 
         papers_df = conn.read(spreadsheet = papers_url)
-        topics_df = conn.read(spreadsheet= topics_url)
+        # topics_df = conn.read(spreadsheet= topics_url)
 
-        return papers_df, topics_df
+        return papers_df,
 
-    papers_df, topics_df = load_data()
+    papers_df = load_data()
     # Set page title
     st.title(" Psychology of Poverty Literature Review Dashboard")
 
