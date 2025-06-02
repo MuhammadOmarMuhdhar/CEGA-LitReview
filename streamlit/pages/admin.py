@@ -11,7 +11,7 @@ if not st.session_state['authenticated']:
     col1, col2, col3 = st.columns([1, 4, 1])
 
     with col2:
-        with st.expander("Login", expanded=True):
+        with st.form("Login"):
 
             st.markdown("  ")
             st.markdown("  ")
@@ -25,14 +25,23 @@ if not st.session_state['authenticated']:
             password = st.text_input("Password", type="password")
 
             st.markdown("  ")
-            
-            if st.button("Login"):
-                if username == "PLACEHODLER" and password =="PLACEHODLER":
+
+            submitted = st.form_submit_button("Login")
+            if submitted:
+                if username == "PLACEHOLDER" and password == "PLACEHOLDER":
                     st.session_state['authenticated'] = True
                     st.success("Logged in successfully")
                     st.rerun()
                 else:
                     st.error("Invalid username or password")
+            
+            # if st.button("Login"):
+            #     if username == "PLACEHODLER" and password =="PLACEHODLER":
+            #         st.session_state['authenticated'] = True
+            #         st.success("Logged in successfully")
+            #         st.rerun()
+            #     else:
+            #         st.error("Invalid username or password")
 
             st.markdown("  ")
             st.markdown("  ")
@@ -52,10 +61,6 @@ from data.ETL import main
 from datetime import datetime
 from dotenv import load_dotenv
 from streamlit_gsheets import GSheetsConnection
-
-
-
-
 
 def load_data():
 
@@ -229,3 +234,31 @@ with tab3:
         if 'logs' in st.session_state:
             st.session_state['logs'] = []
             st.success("Logs cleared")
+
+
+    from streamlit_tree_select import tree_select
+
+    data = [
+        {
+            "label": "Fruit",
+            "value": "fruit",
+            "children": [
+                {"label": "Apple", "value": "apple"},
+                {"label": "Banana", "value": "banana"}
+            ]
+        },
+        {
+            "label": "Vegetable",
+            "value": "vegetable",
+            "children": [
+                {"label": "Carrot", "value": "carrot"},
+                {"label": "Spinach", "value": "spinach"}
+            ]
+        }
+    ]
+
+    selection = tree_select(data)
+    st.write("Selection:", selection)
+
+
+
