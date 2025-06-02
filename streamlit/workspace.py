@@ -39,7 +39,7 @@ def main():
         papers_df = conn.read(spreadsheet = papers_url)
         # topics_df = conn.read(spreadsheet= topics_url)
 
-        return papers_df,
+        return papers_df
 
     papers_df = load_data()
     # Set page title
