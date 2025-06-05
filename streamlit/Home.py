@@ -312,28 +312,8 @@ def main():
                         })
                 return tree
             
-            def get_leaf_nodes(checked_items):
-                """Filter to only get the innermost (leaf) nodes from a hierarchical list"""
-                leaf_nodes = []
-                
-                for item in checked_items:
-                    # Check if this item has any children (other items that start with this item + " > ")
-                    has_children = any(
-                        other_item != item and other_item.startswith(item + " > ")
-                        for other_item in checked_items
-                    )
-                    
-                    if not has_children:
-                        leaf_nodes.append(item)
-                
-                return leaf_nodes
-            
-            # st.write(filters)
-                        
-            
             
             st.markdown("###### Poverty Contexts")
-            st.write(list(filters['poverty_contexts'].keys()))
             selected_contexts = st.multiselect("Poverty Context:", list(filters['poverty_contexts'].keys()))
             st.markdown("###### Study Types")
             selected_study_types = tree_select(build_tree(filters['study_types']))

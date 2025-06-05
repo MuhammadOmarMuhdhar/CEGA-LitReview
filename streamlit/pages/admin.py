@@ -16,6 +16,7 @@ if not st.session_state['authenticated']:
             st.markdown("  ")
             st.markdown("  ")
             
+            
 
             st.write("This page is protected. Please enter credentials to access.")
 
