@@ -333,6 +333,7 @@ def main():
             
             
             st.markdown("###### Poverty Contexts")
+            st.write(list(filters['poverty_contexts'].keys()))
             selected_contexts = st.multiselect("Poverty Context:", list(filters['poverty_contexts'].keys()))
             st.markdown("###### Study Types")
             selected_study_types = tree_select(build_tree(filters['study_types']))
