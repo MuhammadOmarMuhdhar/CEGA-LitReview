@@ -14,7 +14,7 @@ class Scraper:
     and retry logic.
     """
     
-    def __init__(self, requests_per_second: int = 10, email: str = "pepdataviz@gmail.com"):
+    def __init__(self, api_key = None, requests_per_second: int = 10, email: str = "pepdataviz@gmail.com"):
         """
         Initialize the OpenAlexExtractor.
         
@@ -26,17 +26,25 @@ class Scraper:
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         
-        # Initialize rate limiter
-        self.rate_limiter = self._create_rate_limiter(requests_per_second)
         
         # Create session with retry logic
-        self.session = self._create_session(email)
+        self.session = self._create_session(email, api_key)
         
         # Base URL for OpenAlex API
         self.base_url = "https://api.openalex.org/works"
         
         # Store email for API requests
         self.email = email
+
+        # Store API key for authentication
+        self.api_key = api_key
+
+        # Initialize rate limiter
+        if api_key is None:
+            self.rate_limiter = self._create_rate_limiter(requests_per_second)
+        else:
+            self.rate_limiter = self._create_rate_limiter(100)  # Create proper rate limiter structure
+
     
     def _create_rate_limiter(self, requests_per_second: int):
         """
@@ -72,7 +80,7 @@ class Scraper:
         
         self.rate_limiter['window'].append(now)
     
-    def _create_session(self, email: str) -> requests.Session:
+    def _create_session(self, email: str, api_key: str ) -> requests.Session:
         """
         Creates a requests session with retry logic and timeouts.
         
@@ -94,7 +102,8 @@ class Scraper:
         
         # Add default headers
         session.headers.update({
-            'User-Agent': f'YourApp/1.0 (mailto:{email})'
+            'User-Agent': f'YourApp/1.0 (mailto:{email})',
+            'api_key': api_key
         })
         return session
     
@@ -157,9 +166,8 @@ class Scraper:
             except requests.RequestException as e:
                 self.logger.error(f"Error fetching citing works: {e}")
         else:
-            # Process works in batches of 50 (reduced from 200 for better rate limiting)
-            for i in range(0, len(works), 50):
-                batch = works[i:i+50]
+            for i in range(0, len(works), 100):
+                batch = works[i:i+100]
                 work_ids = [w.split('/')[-1] for w in batch]
                 filter_str = f"openalex:{('|').join(work_ids)}"
                 
@@ -202,40 +210,9 @@ class Scraper:
             raise ValueError(f"Date must be in YYYY-MM-DD format. Got: {date_str}")
     
     def run(self, broad_field: str, keyword: str = "Psychology", limit: Optional[int] = None,
-               start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
+            start_date: Optional[str] = None, end_date: Optional[str] = None) -> List[Dict]:
         """
         Extracts paper information from OpenAlex API with improved rate limiting and date filtering.
-        
-        Args:
-            broad_field: The broad field of research
-            keyword: Search keyword (default: "Psychology")
-            limit: Maximum number of papers to extract (default: None)
-            start_date: Filter papers from this date onwards (YYYY-MM-DD format)
-            end_date: Filter papers up to this date (YYYY-MM-DD format)
-            
-        Returns:
-            List of dictionaries containing paper information
-            
-        Raises:
-            ValueError: If keyword is not a string, limit is not an integer, or invalid date format
-            
-        Examples:
-            # Papers from January 1, 2020 to December 31, 2023
-            papers = extractor.extract("Psychology", "cognitive", 
-                                      start_date="2020-01-01", end_date="2023-12-31")
-            
-            # Papers from March 15, 2022 to June 30, 2023
-            papers = extractor.extract("Psychology", "cognitive", 
-                                      start_date="2022-03-15", end_date="2023-06-30")
-            
-            # Papers from January 1, 2023 onwards
-            papers = extractor.extract("Psychology", "cognitive", start_date="2023-01-01")
-            
-            # Papers up to December 31, 2022
-            papers = extractor.extract("Psychology", "cognitive", end_date="2022-12-31")
-            
-            # Recent papers (no date filter)
-            papers = extractor.extract("Psychology", "cognitive")
         """
         if keyword is not None and not isinstance(keyword, str):
             raise ValueError("Keyword must be a string")
@@ -270,24 +247,41 @@ class Scraper:
             "mailto": self.email, 
             "search": keyword,
             "cursor": "*",
-            "per_page": min(50, limit) if limit else 50, 
+            "per_page": min(50, limit) if limit else 100, 
             "filter": filter_str
         }
 
         papers = []
         total_fetched = 0
+        
+        # Add logging setup
+        start_time = time.time()
+        request_count = 0
+        
+        # Log extraction start
+        self.logger.info(f"Starting extraction for keyword: '{keyword}' in field: '{broad_field}'")
+        self.logger.info(f"Date range: {start_date or 'No start'} to {end_date or 'No end'}")
+        self.logger.info(f"Target limit: {limit or 'No limit'}")
 
         try:
-            with ThreadPoolExecutor(max_workers=3) as executor: 
+            with ThreadPoolExecutor(max_workers=4) as executor: 
                 while True:
                     try:
                         data = self._make_request(self.base_url, params)
+                        request_count += 1
+                        
+                        # Log API response info
+                        total_available = data.get('meta', {}).get('count', 0)
+                        current_batch_size = len(data.get('results', []))
+                        
+                        self.logger.info(f"Total papers available in OpenAlex: {total_available:,}")
                         
                         futures = []
                         current_papers = []
                         
                         for work in data.get('results', []):
                             if limit and total_fetched >= limit:
+                                self.logger.info(f"Reached extraction limit of {limit} papers")
                                 return papers
                             
                             citing_works = work.get('cited_by_api_url', '')
@@ -305,11 +299,11 @@ class Scraper:
                                 "keyword": keyword,
                                 'publication': 'Openalex',
                                 'country': [auth['institutions'][0]['country_code'] if auth.get('institutions') else None 
-                                          for auth in work.get('authorships', [])],
+                                        for auth in work.get('authorships', [])],
                                 'date': work.get('publication_year', None),
                                 'field': broad_field,
                                 'institution': [auth['institutions'][0]['display_name'] if auth.get('institutions') else None 
-                                              for auth in work.get('authorships', [])],
+                                            for auth in work.get('authorships', [])],
                                 'abstract': self._clean_abstract(work.get('abstract_inverted_index', 'No Abstract')),
                                 'cited_by_count': work.get('cited_by_count', 0),
                                 'citing_works': None,
@@ -318,22 +312,53 @@ class Scraper:
                             current_papers.append(paper)
                             total_fetched += 1
                         
+                        # Process citations for current batch
                         for i, paper in enumerate(current_papers):
                             paper['citing_works'] = futures[i*2].result()
                             paper['referenced_works'] = futures[i*2+1].result()
                             papers.append(paper)
                         
+                        # Log progress every batch
+                        elapsed_time = time.time() - start_time
+                        papers_per_second = total_fetched / elapsed_time if elapsed_time > 0 else 0
+                        
+                        self.logger.info(f"Progress: {total_fetched:,} papers extracted | "
+                                    f"Rate: {papers_per_second:.1f} papers/sec | "
+                                    f"Elapsed: {elapsed_time:.1f}s")
+                        
+                        # Log progress percentage if we know the total
+                        if limit:
+                            progress_pct = (total_fetched / limit) * 100
+                            self.logger.info(f"Progress: {progress_pct:.1f}% complete")
+                        
                         next_cursor = data.get('meta', {}).get('next_cursor')
                         if not next_cursor:
+                            self.logger.info("No more pages available - extraction complete")
                             break
                         
                         params['cursor'] = next_cursor
                         
                     except requests.RequestException as e:
-                        self.logger.error(f"Error fetching data: {e}")
+                        self.logger.error(f"Request failed on attempt #{request_count}: {e}")
                         continue
                     
         finally:
             self.session.close()
+            
+            # Final summary log
+            total_time = time.time() - start_time
+            avg_rate = total_fetched / total_time if total_time > 0 else 0
+            
+            self.logger.info("="*60)
+            self.logger.info("EXTRACTION SUMMARY")
+            self.logger.info("="*60)
+            self.logger.info(f"Keyword: {keyword}")
+            self.logger.info(f"Field: {broad_field}")
+            self.logger.info(f"Total papers extracted: {total_fetched:,}")
+            self.logger.info(f"Total API requests made: {request_count}")
+            self.logger.info(f"Total time: {total_time:.1f} seconds")
+            self.logger.info(f"Average extraction rate: {avg_rate:.1f} papers/second")
+            self.logger.info(f"Average papers per request: {total_fetched/request_count:.1f}" if request_count > 0 else "N/A")
+            self.logger.info("="*60)
         
         return papers
