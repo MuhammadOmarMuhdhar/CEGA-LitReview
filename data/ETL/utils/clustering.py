@@ -71,10 +71,12 @@ def run(google_sheets, label_model, spreadsheet_id_json):
         # Save clusters to Google Sheets
         clusters_df = pd.DataFrame(clusters_with_text)
         clusters_df = clusters_df.T
+        
         google_sheets.replace(
             df=clusters_df,
             spreadsheet_id=spreadsheet_id_json['topics']
         )
+        return clusters_df
         
     except Exception as e:
         logger.error(f"Error performing topic clustering: {e}")

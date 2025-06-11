@@ -44,23 +44,11 @@ def main():
 
     papers_df = load_data()[0]
     topics_df = load_data()[1]
-    # Set page title
-    col1, col2 = st.columns([3, 1.5])
+    col1, col2 = st.columns([4, 1])
     with col1:
-    # Set the title of the Streamlit app
         st.title(" Psychology of Poverty Literature Review Dashboard")
     with col2:
-    # Add a logo to the Streamlit app
-        st.image("streamlit/logo.png")
-
-
-
-    # # Example: Display an image from a file
-    # image_path = "streamlit/logo.png"
-    # image = Image.open(image_path)
-
-    # st.image(image, use_column_width=None)
-
+        st.image("streamlit/logo.png", use_container_width=True)
 
     # Create tabs for workspace functionalities
     tab1, tab2= st.tabs(["About", "Dashboard"])
@@ -133,9 +121,6 @@ def main():
         # Introduction
         st.markdown("""
             In this research landscape analysis, we offer a guided exploration of research on the psychology poverty research through an interactive data dashboard. Our dataset encompasses academic scholarship across diverse disciplines and institutional sources spanning multiple geographic regions, providing a multi-faceted lens into contemporary poverty studies.
-
-            Our goal is to map the intellectual terrain of poverty research in a manner that can be explored. Through this exploratory dashboard, we hope to illuminate significant scholarly contributions, trace emerging research trends, and encourage more interdisciplinary collaboration around poverty alleviation and social development.
-
             """)
 
         
@@ -314,16 +299,13 @@ def main():
             
             
             st.markdown("###### Poverty Contexts")
-            selected_contexts = st.multiselect("Poverty Context:", list(filters['poverty_contexts'].keys()))
+            selected_contexts = st.multiselect("Select", list(filters['poverty_contexts'].keys()))
             st.markdown("###### Study Types")
             selected_study_types = tree_select(build_tree(filters['study_types']))
             st.markdown("###### Psychological Mechanisms")
             selected_mechanisms = tree_select(build_tree(filters['mechanisms']))
             st.markdown("###### Behavioral Outcomes")
             selected_behaviors = tree_select(build_tree(filters['Behaviors']))
-
-            
-
 
             all_selected_context = []
             for key in selected_contexts:
@@ -383,18 +365,40 @@ def main():
             if all_selected_behaviors:
                 working_df_exploded = working_df_exploded[working_df_exploded['behavior'].isin(all_selected_behaviors)]
 
-            working_df = working_df[working_df['doi'].isin(working_df_exploded['doi'].tolist())]            
+            working_df = working_df[working_df['doi'].isin(working_df_exploded['doi'].tolist())]       
 
+        # In col2, use working_df_viz for the Sankey
         with col2:
-            
-            # st.write(all_selected_mechanisms)
 
-            # Create and display the Sankey diagram
-            sankey_fig = sankey.draw(working_df_exploded)
+
+            # Prepare active_filters dictionary for the sankey function
+            active_filters = {
+                'contexts': selected_contexts if selected_contexts else [],
+                'study_types': all_selected_study_types if all_selected_study_types else [],
+                'mechanisms': all_selected_mechanisms if all_selected_mechanisms else [],
+                'behaviors': all_selected_behaviors if all_selected_behaviors else []
+            }
+            
+           
+            
+            # Create and display the Sankey diagram with adaptive detail
+
+            sankey_diagram = sankey.Sankey(filters_json = filters)
+
+            sankey_fig = sankey_diagram.draw(working_df_exploded, active_filters=active_filters)
+
+            # sankey_fig = sankey.draw(
+            #     working_df_exploded, 
+            #     filters_json=filters, 
+            #     active_filters=active_filters,
+            #     manual_detail_level=None,
+
+            # )
             st.plotly_chart(sankey_fig, use_container_width=True)
 
 
-           
+    
+                
 
 
 
