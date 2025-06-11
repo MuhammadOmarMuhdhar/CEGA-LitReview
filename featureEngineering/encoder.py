@@ -62,7 +62,12 @@ def run(papers,
     
     for i in range(0, len(abstracts_to_encode), batch_size):
         batch = abstracts_to_encode[i:i+batch_size]
-        batch_embeddings = model.encode(batch, convert_to_tensor=True,  normalize_embeddings=True)
+        batch_embeddings = model.encode(
+            batch, 
+            convert_to_tensor=True, 
+            normalize_embeddings=True,
+            show_progress_bar=False
+        )
         
         # Convert to numpy for storage
         if isinstance(batch_embeddings, torch.Tensor):

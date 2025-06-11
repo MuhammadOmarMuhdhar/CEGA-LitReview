@@ -6,5 +6,11 @@ analysis.ipynb
 data_viz_proj.ipynb
 analysis
 .streamlit
-data
 sample_data
+__pycache__
+
+.env
+.devcontainer/devcontainer.json
+.gitignore
+.ipynb_checkpoints/workspace-checkpoint.ipynb
+.vscode/settings.json
