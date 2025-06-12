@@ -120,3 +120,4 @@ validators==0.34.0
 wcwidth==0.2.13
 widgetsnbextension==4.0.13
 streamlit-tree-select==0.0.5
+python-dotenv == 1.1.0
