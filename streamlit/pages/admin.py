@@ -9,6 +9,8 @@ from data.ETL import main
 from datetime import datetime
 from dotenv import load_dotenv
 from streamlit_gsheets import GSheetsConnection
+from data.googleSheets import API
+import json
 
 # Function to load environment variables with Streamlit compatibility
 def load_environment_variables():
@@ -84,8 +86,36 @@ def get_configuration():
     
     return api_key, credentials, spreadsheet_ids, email, password
 
+def get_categories_and_keys(data):
+    result = {}
+
+    def recursive_search(current_data):
+        if isinstance(current_data, dict):
+            innermost_keys = []
+            for key, value in current_data.items():
+                if isinstance(value, dict) or isinstance(value, list):
+                    innermost_keys.extend(recursive_search(value))
+                else:
+                    innermost_keys.append(value)
+            return innermost_keys
+        elif isinstance(current_data, list):
+            return current_data
+        else:
+            return [current_data]
+
+    for broad_category, sub_data in data.items():
+        result[broad_category] = recursive_search(sub_data)
+
+    return result
+
 # Get configuration
 api_key, credentials, spreadsheet_ids , email, password = get_configuration()
+
+with open('data/log.json', 'r') as f:
+    log_data = json.load(f)
+
+with open('data/trainingData/labels.json', 'r') as f:
+    labels = json.load(f)
 
 # enter username password otherwise page isnt authorized
 if 'authenticated' not in st.session_state:
@@ -132,10 +162,111 @@ def initialize_pipeline():
         api_key=api_key,
         credentials_json=credentials,
         spreadsheet_id_json=spreadsheet_ids,
-        limit=10
+        limit=None
     )
 
 data_pipeline = initialize_pipeline()
+
+@st.dialog("Confirm Deletion")
+def confirm_delete_dialog(paper_title, papers_df, google_sheets_connection, spreadsheet_ids, database_to_update, key):
+    """
+    Confirmation dialog for paper deletion
+    """
+    st.write(f"Are you sure you want to delete this paper?")
+    st.markdown(f"**Title:** {paper_title}")
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col2:
+        if st.button("❌ Cancel", key=f"cancel_{key}", use_container_width=True):
+            st.rerun()
+    
+    with col3:
+        if st.button("🗑️ Delete", key=f"confirm_{key}", type="primary", use_container_width=True):
+            # Show spinner during deletion
+            with st.spinner("Deleting paper from database..."):
+                # Delete the paper
+                paper_index = papers_df.index[0]
+                updated_db = database_to_update.drop(paper_index).reset_index(drop=True)
+                
+                # Save changes back to Google Sheets
+                google_sheets_connection.replace(
+                    spreadsheet_id=spreadsheet_ids['papers'],
+                    df=updated_db
+                )
+            
+            st.success("Paper deleted successfully!")
+            st.rerun()
+
+def display_paper_details(papers_df, key=None, show_delete=False, google_sheets_connection=None,
+                         spreadsheet_ids=None, database_to_update=None):
+    """
+    Display paper details with optional delete functionality
+    """
+    # Drop down to select paper
+    with st.expander("Human Review", expanded=True):
+        
+        # Delete button at the top if enabled
+        if show_delete:
+            # Create columns for spacing and delete button
+            delete_col, spacer_col = st.columns([4, 1])
+            with delete_col:
+                if st.button("🗑️ Delete", type="secondary", key=f"delete_{key}"):
+                    # We need to get the selected paper first
+                    if 'selected_paper_temp' in st.session_state:
+                        selected_paper = st.session_state['selected_paper_temp']
+                        selected_paper_details = papers_df[papers_df['title'] == selected_paper]
+                        confirm_delete_dialog(
+                            selected_paper,
+                            selected_paper_details,
+                            google_sheets_connection,
+                            spreadsheet_ids,
+                            database_to_update,
+                            key
+                        )
+        
+        # Select paper dropdown with improved styling
+        selected_paper = st.selectbox(" ", papers_df['title'].unique(), key=f"select_{key}")
+        
+        # Store selected paper in session state for delete function
+        st.session_state['selected_paper_temp'] = selected_paper
+        
+        # Display the selected paper's details
+        selected_paper_details = papers_df[papers_df['title'] == selected_paper]
+        # format all list values in the dataframe to string
+        selected_paper_details = selected_paper_details.applymap(lambda x: ', '.join(x) if isinstance(x, list) else x)
+        
+        # Display paper information
+        st.markdown(f"**Title:** {selected_paper_details['title'].values[0]}")
+        st.markdown(f"**Study Type:** {selected_paper_details['study_type'].values[0]}")
+        st.markdown(f"**Context:** {selected_paper_details['poverty_context'].values[0]}")
+        st.markdown(f"**Mechanism:** {selected_paper_details['mechanism'].values[0]}")
+        st.markdown(f"**Behavior:** {selected_paper_details['behavior'].values[0]}")
+        st.markdown(f"**Authors:** {selected_paper_details['authors'].values[0]}")
+        st.markdown(f"**Abstract:** {selected_paper_details['abstract'].values[0]}")
+
+
+
+    
+# And for adding new papers:
+def add_paper_with_spinner(new_paper, database_to_update, google_sheets_connection, spreadsheet_ids):
+    """
+    Add New Paper Manually with spinner feedback
+    """
+    with st.spinner("Adding new paper to database..."):
+        # Add to dataframe
+        new_row = pd.DataFrame([new_paper])
+        database_to_update = pd.concat([database_to_update, new_row], ignore_index=True)
+        
+        # Save changes back to Google Sheets
+        google_sheets_connection.replace(
+            spreadsheet_id=spreadsheet_ids['papers'],
+            df=database_to_update
+        )
+    
+    st.success("New paper added successfully!")
+    return database_to_update
+
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_data():
@@ -153,8 +284,13 @@ def load_data():
         st.error(f"Error loading data: {str(e)}")
         return pd.DataFrame(), pd.DataFrame()
 
+google_sheets_connection = API(credentials_json=credentials)
+database_to_update = google_sheets_connection.read(
+        spreadsheet_id=spreadsheet_ids['papers']
+    )
+
 # Main content
-tab1, tab2, tab3 = st.tabs(["Update Database", "View Data", "Logs"])
+tab1, tab2, tab3, tab4 = st.tabs(["Update Database", "View Data", "Edit Database", "Logs"])
 
 with tab1:
     st.header("Update Database")
@@ -162,8 +298,13 @@ with tab1:
     col1, col2 = st.columns(2)
     
     with col1:
-        start_date = st.date_input("Start Date", datetime.today())
-        end_date = st.date_input("End Date", datetime.today())
+    
+        start_date = log_data["last_updated"]
+        start_date = datetime.strptime(start_date, '%Y-%m-%d')
+        start_date=start_date.strftime('%Y-%m-%d')
+        end_date = datetime.today()
+        end_date=end_date.strftime('%Y-%m-%d')
+        st.write(f"It has been {(datetime.now().date() - datetime.strptime(start_date, '%Y-%m-%d').date()).days} days since the last update.")
 
         if 'data_fetched' not in st.session_state:
             st.session_state.data_fetched = False
@@ -177,8 +318,8 @@ with tab1:
                 
                 try:
                     papers = data_pipeline.run(
-                        start_date=start_date.strftime('%Y-%m-%d'),
-                        end_date=end_date.strftime('%Y-%m-%d'))
+                        start_date,
+                        end_date)
                     st.session_state.papers = papers
                     st.session_state.data_fetched = True
                 except Exception as e:
@@ -186,37 +327,33 @@ with tab1:
                     warning_placeholder.empty()
 
             if st.session_state.data_fetched:
+                # Log the successful data fetch
+                current_date = datetime.now().strftime("%Y-%m-%d")
+                log_data["last_updated"] = current_date
+                log_data["updates"].append({"date": current_date})
+                with open("data/log.json", "w") as file:
+                    json.dump(log_data, file, indent=2)
+
                 # Clear the warning and show success
                 warning_placeholder.empty()
                 st.success("Data fetched successfully! You can validate the data to confirm accuracy of ETL processing results.")
 
     with col2:
         if st.session_state.data_fetched:
-            def display_paper_details(papers_df):
-                # Drop down to select paper
-                with st.expander("Human Review", expanded=True):
-                    st.markdown("##### Validate Extracted Papers")
-                    
-                    # Select paper dropdown with improved styling
-                    selected_paper = st.selectbox("Validate extracted data and confirm accuracy of ETL processing results", papers_df['title'].unique())
-
-                    # Display the selected paper's details
-                    selected_paper_details = papers_df[papers_df['title'] == selected_paper]
-                    # format all list values in the dataframe to string
-                    selected_paper_details = selected_paper_details.applymap(lambda x: ', '.join(x) if isinstance(x, list) else x)
-
-                    st.markdown(f"**Context:** {selected_paper_details['poverty_context'].values[0]}")
-                    st.markdown(f"**Mechanism:** {selected_paper_details['mechanism'].values[0]}")
-                    st.markdown(f"**Study Type:** {selected_paper_details['study_type'].values[0]}")
-                    st.markdown(f"**Authors:** {selected_paper_details['authors'].values[0]}")
-                    st.markdown(f"**Abstract:** {selected_paper_details['abstract'].values[0]}")
-
-            display_paper_details(st.session_state.papers)
+             display_paper_details(
+                    st.session_state.papers, 
+                    key="loading_papers",
+                    show_delete=True,
+                    google_sheets_connection=google_sheets_connection,
+                    spreadsheet_ids=spreadsheet_ids,
+                    database_to_update=database_to_update
+                )
 
 with tab2:
-    papers_df, topics_df = load_data()
-    if not papers_df.empty:
-        st.dataframe(papers_df[['doi', 'title', 'authors', 'abstract', 'country', 'institution', 'study_type', 'poverty_context', 'mechanism']], use_container_width=True)
+    st.header("View Data")
+    # papers_df, topics_df = load_data()
+    if not database_to_update.empty:
+        st.dataframe(database_to_update[['doi', 'title', 'authors', 'abstract', 'country', 'institution', 'study_type', 'poverty_context', 'mechanism', 'behavior']], use_container_width=True)
     else:
         st.info("No data available")
 
@@ -228,42 +365,222 @@ with tab2:
             st.rerun()
 
 with tab3:
-    st.header("Operation Logs")
-    
-    if 'logs' in st.session_state and st.session_state['logs']:
-        logs_df = pd.DataFrame(st.session_state['logs'])
-        st.dataframe(logs_df, use_container_width=True)
-    else:
-        st.info("No logs available yet")
-    
-    if st.button("Clear Logs"):
-        if 'logs' in st.session_state:
-            st.session_state['logs'] = []
-            st.success("Logs cleared")
 
-    try:
-        from streamlit_tree_select import tree_select
+    st.header("Edit Database")
+    col3, col4 = st.columns(2)
+    with col3:
+        doi = st.text_input("Enter the DOI or title:", "")
+    
+    label_data = get_categories_and_keys(labels)
 
-        data = [
-            {
-                "label": "Fruit",
-                "value": "fruit",
-                "children": [
-                    {"label": "Apple", "value": "apple"},
-                    {"label": "Banana", "value": "banana"}
-                ]
-            },
-            {
-                "label": "Vegetable",
-                "value": "vegetable",
-                "children": [
-                    {"label": "Carrot", "value": "carrot"},
-                    {"label": "Spinach", "value": "spinach"}
-                ]
-            }
+    if doi and doi.strip():
+        # Fixed boolean indexing for pandas
+        paper_data = database_to_update[
+            (database_to_update['doi'] == doi) | 
+            (database_to_update['title'].str.lower() == doi.lower())
         ]
+        
+        # Now create the main content columns
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if not paper_data.empty:
+                display_paper_details(
+                    paper_data, 
+                    key="edit_database",
+                    show_delete=True,
+                    google_sheets_connection=google_sheets_connection,
+                    spreadsheet_ids=spreadsheet_ids,
+                    database_to_update=database_to_update
+                )
+            else:
+                st.info("Paper not found in database")
+        
+        with col2:
+            # Edit existing paper
+            if not paper_data.empty:
+                with st.form("edit_form"):
+                    st.markdown("### Edit Paper Details")
+                    
+                    # Get current values for default selection
+                    current_paper = paper_data.iloc[0]
+                    
+                    # Convert current values to lists for multi-select
+                    current_study_types = [current_paper.get('study_type', '')] if current_paper.get('study_type', '') else []
+                    current_poverty_contexts = [current_paper.get('poverty_context', '')] if current_paper.get('poverty_context', '') else []
+                    current_mechanisms = [current_paper.get('mechanism', '')] if current_paper.get('mechanism', '') else []
+                    current_behaviors = [current_paper.get('behavior', '')] if current_paper.get('behavior', '') else []
+                    
+                    # Handle comma-separated values if they exist
+                    if isinstance(current_paper.get('study_type', ''), str) and ',' in current_paper.get('study_type', ''):
+                        current_study_types = [x.strip() for x in current_paper.get('study_type', '').split(',')]
+                    if isinstance(current_paper.get('poverty_context', ''), str) and ',' in current_paper.get('poverty_context', ''):
+                        current_poverty_contexts = [x.strip() for x in current_paper.get('poverty_context', '').split(',')]
+                    if isinstance(current_paper.get('mechanism', ''), str) and ',' in current_paper.get('mechanism', ''):
+                        current_mechanisms = [x.strip() for x in current_paper.get('mechanism', '').split(',')]
+                    if isinstance(current_paper.get('behavior', ''), str) and ',' in current_paper.get('behavior', ''):
+                        current_behaviors = [x.strip() for x in current_paper.get('behavior', '').split(',')]
+                    
+                    # Multi-select fields for editing
+                    study_types = st.multiselect(
+                        "Study Types", 
+                        options=label_data['study_types'], 
+                        default=[x for x in current_study_types if x in label_data['study_types']]
+                    )
+                    poverty_contexts = st.multiselect(
+                        "Poverty Contexts", 
+                        options=label_data['poverty_contexts'], 
+                        default=[x for x in current_poverty_contexts if x in label_data['poverty_contexts']]
+                    )
+                    mechanisms = st.multiselect(
+                        "Mechanisms", 
+                        options=label_data['mechanisms'], 
+                        default=[x for x in current_mechanisms if x in label_data['mechanisms']]
+                    )
+                    behaviors = st.multiselect(
+                        "Behaviors", 
+                        options=label_data['Behaviors'], 
+                        default=[x for x in current_behaviors if x in label_data['Behaviors']]
+                    )
+                    
+                    submit_button = st.form_submit_button(label="Update Paper")
+                    
+                    if submit_button:
+                        with st.spinner("Updating paper in database..."):
+                            try:
+                                # Update the paper data with comma-separated values
+                                paper_index = paper_data.index[0]
+                                database_to_update.at[paper_index, 'study_type'] = ', '.join(study_types) if study_types else ''
+                                database_to_update.at[paper_index, 'poverty_context'] = ', '.join(poverty_contexts) if poverty_contexts else ''
+                                database_to_update.at[paper_index, 'mechanism'] = ', '.join(mechanisms) if mechanisms else ''
+                                database_to_update.at[paper_index, 'behavior'] = ', '.join(behaviors) if behaviors else ''
+                                
+                                # Save changes back to Google Sheets
+                                google_sheets_connection.replace(
+                                    spreadsheet_id=spreadsheet_ids['papers'],
+                                    df=database_to_update
+                                )
+                                st.success("Paper details updated successfully!")
+                                
+                            except Exception as e:
+                                st.error(f"Error updating paper: {str(e)}")
+                        
+                        st.rerun()
+            
+            # Add New Paper Manually section
+            else:
+                with st.form("add_form"):
+                    st.markdown("### Add New Paper Manually Manually")
+                    
+                    # Input fields for new paper
+                    new_title = st.text_input("Title", value=doi if doi else "")
+                    new_doi = st.text_input("DOI", value=doi if doi.startswith('10.') else "")
+                    new_authors = st.text_input("Authors")
+                    new_year = st.number_input("Year", min_value=1900, max_value=2030, value=2024)
+                    new_journal = st.text_input("Journal")
+                    new_abstract = st.text_area("Abstract")
+                    
+                    # Multi-select category selections
+                    new_study_types = st.multiselect("Study Types", options=label_data['study_types'])
+                    new_poverty_contexts = st.multiselect("Poverty Contexts", options=label_data['poverty_contexts'])
+                    new_mechanisms = st.multiselect("Mechanisms", options=label_data['mechanisms'])
+                    new_behaviors = st.multiselect("Behaviors", options=label_data['Behaviors'])
+                    
+                    add_button = st.form_submit_button(label="Add New Paper Manually")
+                    
+                    if add_button:
+                        with st.spinner("Adding new paper to database..."):
+                            try:
+                                # Create new paper entry with comma-separated values
+                                new_paper = {
+                                    'title': new_title,
+                                    'doi': new_doi,
+                                    'authors': new_authors,
+                                    'year': new_year,
+                                    'journal': new_journal,
+                                    'abstract': new_abstract,
+                                    'study_type': ', '.join(new_study_types) if new_study_types else '',
+                                    'poverty_context': ', '.join(new_poverty_contexts) if new_poverty_contexts else '',
+                                    'mechanism': ', '.join(new_mechanisms) if new_mechanisms else '',
+                                    'behavior': ', '.join(new_behaviors) if new_behaviors else ''
+                                }
+                                
+                                # Add to dataframe
+                                new_row = pd.DataFrame([new_paper])
+                                database_to_update = pd.concat([database_to_update, new_row], ignore_index=True)
+                                
+                                # Save changes back to Google Sheets
+                                google_sheets_connection.replace(
+                                    spreadsheet_id=spreadsheet_ids['papers'],
+                                    df=database_to_update
+                                )
+                                st.success("New paper added successfully!")
+                                
+                            except Exception as e:
+                                st.error(f"Error adding paper: {str(e)}")
+                        
+                        st.rerun()
 
-        selection = tree_select(data)
-        st.write("Selection:", selection)
-    except ImportError:
-        st.info("streamlit_tree_select not available")
+    else:
+        st.info("Enter a DOI or title to search for papers")
+        
+        # Option to Add New Paper Manually without searching
+        with st.expander("➕ Add New Paper Manually"):
+            with st.form("add_new_form"):
+                st.markdown("### Add New Paper Manually")
+                
+                # Input fields for new paper
+                new_title = st.text_input("Title")
+                new_doi = st.text_input("DOI")
+                new_authors = st.text_input("Authors")
+                new_year = st.number_input("Year", min_value=1900, max_value=2030, value=2024)
+                new_journal = st.text_input("Journal")
+                new_abstract = st.text_area("Abstract")
+                
+                # Multi-select category selections
+                new_study_types = st.multiselect("Study Types", options=label_data['study_types'])
+                new_poverty_contexts = st.multiselect("Poverty Contexts", options=label_data['poverty_contexts'])
+                new_mechanisms = st.multiselect("Mechanisms", options=label_data['mechanisms'])
+                new_behaviors = st.multiselect("Behaviors", options=label_data['Behaviors'])
+                
+                add_button = st.form_submit_button(label="Add New Paper Manually")
+                
+                if add_button and new_title:  # Require at least a title
+                    with st.spinner("Adding new paper to database..."):
+                        try:
+                            # Create new paper entry with comma-separated values
+                            new_paper = {
+                                'title': new_title,
+                                'doi': new_doi,
+                                'authors': new_authors,
+                                'year': new_year,
+                                'journal': new_journal,
+                                'abstract': new_abstract,
+                                'study_type': ', '.join(new_study_types) if new_study_types else '',
+                                'poverty_context': ', '.join(new_poverty_contexts) if new_poverty_contexts else '',
+                                'mechanism': ', '.join(new_mechanisms) if new_mechanisms else '',
+                                'behavior': ', '.join(new_behaviors) if new_behaviors else ''
+                            }
+                            
+                            # Add to dataframe
+                            new_row = pd.DataFrame([new_paper])
+                            database_to_update = pd.concat([database_to_update, new_row], ignore_index=True)
+                            
+                            # Save changes back to Google Sheets
+                            google_sheets_connection.replace(
+                                spreadsheet_id=spreadsheet_ids['papers'],
+                                df=database_to_update
+                            )
+                            st.success("New paper added successfully!")
+                            
+                        except Exception as e:
+                            st.error(f"Error adding paper: {str(e)}")
+                    
+                    st.rerun()
+
+            
+with tab4:
+    st.header("Operation Logs")
+
+    logs_df = pd.DataFrame(log_data)
+    st.write(log_data, use_container_width=True)

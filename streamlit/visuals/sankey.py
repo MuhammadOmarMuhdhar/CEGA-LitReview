@@ -5,10 +5,10 @@ import pandas as pd
 
 class Sankey:
     """
-    A class for creating hierarchical Sankey diagrams with dynamic aggregation levels.
+    A class for creating hierarchical Sankey diagrams with dynamic aggregation levels and modular node selection.
     
     This class creates Sankey diagrams that can display data at different levels of detail
-    based on active filters and hierarchy information.
+    based on active filters and hierarchy information, with full control over which nodes to display.
     """
     
     def __init__(self, filters_json=None, default_colors=None):
@@ -22,6 +22,30 @@ class Sankey:
         self.filters_json = filters_json
         self.default_colors = default_colors or px.colors.qualitative.Vivid
         self.mappers = None
+        
+        # Define all available columns and their hierarchy keys
+        self.available_columns = {
+            'poverty_context': {
+                'hierarchy_key': 'poverty_contexts',
+                'display_name': 'Poverty Context',
+                'color_offset': 0
+            },
+            'study_type': {
+                'hierarchy_key': 'study_types', 
+                'display_name': 'Study Type',
+                'color_offset': 5
+            },
+            'mechanism': {
+                'hierarchy_key': 'mechanisms',
+                'display_name': 'Mechanism',
+                'color_offset': 10
+            },
+            'behavior': {
+                'hierarchy_key': 'Behaviors',
+                'display_name': 'Behavior',
+                'color_offset': 15
+            }
+        }
         
         if filters_json:
             self.mappers = self._create_hierarchy_mappers()
@@ -45,54 +69,30 @@ class Sankey:
         """Create mapping functions to convert specific categories to broader ones."""
         if not self.filters_json:
             return None
+        
+        mappers = {}
+        
+        for col_name, col_info in self.available_columns.items():
+            hierarchy_key = col_info['hierarchy_key']
             
-        def map_study_type(specific_value, target_level=1):
-            """Map study type to broader category with variable depth handling."""
-            path = self._find_item_path(specific_value, self.filters_json['study_types'])
-            if path and len(path) >= target_level:
-                return path[target_level - 1]
-            elif path:
-                # If target level is deeper than available, return the deepest available
-                return path[-1]
-            return specific_value  # fallback if not found
+            def create_mapper(hierarchy_key):
+                def mapper(specific_value, target_level=1):
+                    """Map value to broader category with variable depth handling."""
+                    if hierarchy_key not in self.filters_json:
+                        return specific_value
+                    
+                    path = self._find_item_path(specific_value, self.filters_json[hierarchy_key])
+                    if path and len(path) >= target_level:
+                        return path[target_level - 1]
+                    elif path:
+                        # If target level is deeper than available, return the deepest available
+                        return path[-1]
+                    return specific_value  # fallback if not found
+                return mapper
+            
+            mappers[col_name] = create_mapper(hierarchy_key)
         
-        def map_mechanism(specific_value, target_level=1):
-            """Map mechanism to broader category with variable depth handling."""
-            path = self._find_item_path(specific_value, self.filters_json['mechanisms'])
-            if path and len(path) >= target_level:
-                return path[target_level - 1]
-            elif path:
-                # If target level is deeper than available, return the deepest available
-                return path[-1]
-            return specific_value  # fallback if not found
-        
-        def map_behavior(specific_value, target_level=1):
-            """Map behavior to broader category with variable depth handling."""
-            path = self._find_item_path(specific_value, self.filters_json['Behaviors'])
-            if path and len(path) >= target_level:
-                return path[target_level - 1]
-            elif path:
-                # If target level is deeper than available, return the deepest available
-                return path[-1]
-            return specific_value  # fallback if not found
-        
-        def map_poverty_context(specific_value, target_level=1):
-            """Map poverty context with variable depth handling."""
-            # Handle both direct lists and nested structures
-            if isinstance(self.filters_json['poverty_contexts'], dict):
-                path = self._find_item_path(specific_value, self.filters_json['poverty_contexts'])
-                if path and len(path) >= target_level:
-                    return path[target_level - 1]
-                elif path:
-                    return path[-1]
-            return specific_value  # fallback if not found or if already at top level
-        
-        return {
-            'study_type': map_study_type,
-            'mechanism': map_mechanism,
-            'behavior': map_behavior,
-            'poverty_context': map_poverty_context
-        }
+        return mappers
     
     def _get_max_depth(self, data, current_depth=1):
         """Helper function to find maximum depth for a category."""
@@ -105,69 +105,81 @@ class Sankey:
                     max_depth = max(max_depth, current_depth + 1)
         return max_depth
     
-    def _determine_detail_levels(self, active_filters):
+    def _determine_detail_levels(self, active_filters, columns_to_show):
         """Determine appropriate detail level for each category based on active filters."""
         detail_levels = {}
         
-        # Get maximum depths for each category
+        # Get maximum depths for each category that will be shown
         max_depths = {}
         if self.filters_json:
-            max_depths['poverty_context'] = self._get_max_depth(self.filters_json.get('poverty_contexts', {}))
-            max_depths['study_type'] = self._get_max_depth(self.filters_json.get('study_types', {}))
-            max_depths['mechanism'] = self._get_max_depth(self.filters_json.get('mechanisms', {}))
-            max_depths['behavior'] = self._get_max_depth(self.filters_json.get('Behaviors', {}))
+            for col_name in columns_to_show:
+                if col_name in self.available_columns:
+                    hierarchy_key = self.available_columns[col_name]['hierarchy_key']
+                    max_depths[col_name] = self._get_max_depth(self.filters_json.get(hierarchy_key, {}))
         else:
             # Default max depths if no filter info available
-            max_depths = {'poverty_context': 2, 'study_type': 3, 'mechanism': 2, 'behavior': 2}
+            for col_name in columns_to_show:
+                max_depths[col_name] = 2
         
         # Default to broadest level
         base_level = 1
         
+        # Map active_filters keys to column names
+        filter_key_to_column = {
+            'contexts': 'poverty_context',
+            'study_types': 'study_type', 
+            'mechanisms': 'mechanism',
+            'behaviors': 'behavior'
+        }
+        
         # If any filters are active, show the deepest level for ONLY those specific categories
-        detail_levels['poverty_context'] = max_depths['poverty_context'] if active_filters.get('contexts') else base_level
-        detail_levels['study_type'] = max_depths['study_type'] if active_filters.get('study_types') else base_level
-        detail_levels['mechanism'] = max_depths['mechanism'] if active_filters.get('mechanisms') else base_level
-        detail_levels['behavior'] = max_depths['behavior'] if active_filters.get('behaviors') else base_level
+        for col_name in columns_to_show:
+            # Find the corresponding filter key
+            filter_key = None
+            for fk, cn in filter_key_to_column.items():
+                if cn == col_name:
+                    filter_key = fk
+                    break
+            
+            if filter_key and active_filters.get(filter_key):
+                detail_levels[col_name] = max_depths.get(col_name, base_level)
+            else:
+                detail_levels[col_name] = base_level
         
         return detail_levels
     
-    def _aggregate_dataframe(self, df, detail_levels):
+    def _aggregate_dataframe(self, df, detail_levels, columns_to_show):
         """Create display columns with appropriate aggregation level."""
         if not self.mappers:
             return df
             
         df_display = df.copy()
         
-        # Apply mapping for each category
-        df_display['display_poverty_context'] = df_display['poverty_context'].apply(
-            lambda x: self.mappers['poverty_context'](x, detail_levels['poverty_context'])
-        )
-        
-        df_display['display_study_type'] = df_display['study_type'].apply(
-            lambda x: self.mappers['study_type'](x, detail_levels['study_type'])
-        )
-        
-        df_display['display_mechanism'] = df_display['mechanism'].apply(
-            lambda x: self.mappers['mechanism'](x, detail_levels['mechanism'])
-        )
-        
-        df_display['display_behavior'] = df_display['behavior'].apply(
-            lambda x: self.mappers['behavior'](x, detail_levels['behavior'])
-        )
+        # Apply mapping for each column that will be shown
+        for col_name in columns_to_show:
+            if col_name in self.mappers and col_name in detail_levels:
+                display_col = f'display_{col_name}'
+                df_display[display_col] = df_display[col_name].apply(
+                    lambda x: self.mappers[col_name](x, detail_levels[col_name])
+                )
         
         return df_display
     
-    def _preprocess_dataframe(self, df):
+    def _preprocess_dataframe(self, df, columns_to_show):
         """Clean and filter the dataframe before processing."""
-        # Filter categories with counts > 2
-        for col in ['poverty_context', 'mechanism', 'study_type']:
-            df = df[df[col].map(df[col].value_counts()) > 2]
+        # Only apply preprocessing to columns that will be shown and exist in the dataframe
+        existing_columns = [col for col in columns_to_show if col in df.columns]
+        
+        # Filter categories with counts > 2 (only for specific columns)
+        filter_count_columns = ['poverty_context', 'mechanism', 'study_type']
+        for col in filter_count_columns:
+            if col in existing_columns:
+                df = df[df[col].map(df[col].value_counts()) > 2]
 
         # Drop all null values and 'Insufficient info' values
         exclude_values = ['Insufficient info']
-        columns_to_clean = ['poverty_context', 'mechanism', 'study_type', 'behavior']
         
-        for col in columns_to_clean:
+        for col in existing_columns:
             df = df[df[col].notnull()]
             df = df[~df[col].isin(exclude_values)]
         
@@ -182,82 +194,91 @@ class Sankey:
             return color.replace('rgb', 'rgba').rstrip(')') + f',{alpha})'
         return f'rgba(128,128,128,{alpha})'
     
-    def _create_node_structure(self, df_display, use_display_columns=True):
-        """Create node labels, indices, and colors."""
+    def _create_node_structure(self, df_display, columns_to_show, use_display_columns=True):
+        """Create node labels, indices, and colors for specified columns only."""
         # Determine which columns to use
-        if use_display_columns and 'display_poverty_context' in df_display.columns:
-            context_col = 'display_poverty_context'
-            study_col = 'display_study_type'
-            mechanism_col = 'display_mechanism'
-            behavior_col = 'display_behavior'
-        else:
-            context_col = 'poverty_context'
-            study_col = 'study_type'
-            mechanism_col = 'mechanism'
-            behavior_col = 'behavior'
+        column_mappings = {}
+        for col_name in columns_to_show:
+            if use_display_columns and f'display_{col_name}' in df_display.columns:
+                column_mappings[col_name] = f'display_{col_name}'
+            else:
+                column_mappings[col_name] = col_name
         
-        # Get unique values for each category
-        categories = {
-            'context': df_display[context_col].unique().tolist(),
-            'study': df_display[study_col].unique().tolist(),
-            'mechanism': df_display[mechanism_col].unique().tolist(),
-            'behavior': df_display[behavior_col].unique().tolist()
-        }
+        # Get unique values for each category that will be shown
+        categories = {}
+        for col_name in columns_to_show:
+            if column_mappings[col_name] in df_display.columns:
+                categories[col_name] = df_display[column_mappings[col_name]].unique().tolist()
+            else:
+                categories[col_name] = []
         
         # Create node labels and indices
-        node_labels = categories['context'] + categories['study'] + categories['mechanism'] + categories['behavior']
-        node_indices = {
-            'context': {label: i for i, label in enumerate(categories['context'])},
-            'study': {label: i + len(categories['context']) for i, label in enumerate(categories['study'])},
-            'mechanism': {label: i + len(categories['context']) + len(categories['study']) 
-                        for i, label in enumerate(categories['mechanism'])},
-            'behavior': {label: i + len(categories['context']) + len(categories['study']) + len(categories['mechanism'])
-                        for i, label in enumerate(categories['behavior'])}
-        }
+        node_labels = []
+        node_indices = {}
+        current_index = 0
+        
+        for col_name in columns_to_show:
+            node_indices[col_name] = {}
+            for label in categories[col_name]:
+                node_indices[col_name][label] = current_index
+                node_labels.append(label)
+                current_index += 1
         
         # Assign colors using the color palette
         vivid = self.default_colors
-        node_colors = (
-            [vivid[i % len(vivid)] for i in range(len(categories['context']))] +  # Context colors
-            ['#689F38'] * len(categories['study']) +  # Study type (green)
-            [vivid[(i + 5) % len(vivid)] for i in range(len(categories['mechanism']))] +  # Mechanism colors
-            [vivid[(i + 10) % len(vivid)] for i in range(len(categories['behavior']))]  # Behavior colors
-        )
+        node_colors = []
         
-        return categories, node_labels, node_indices, node_colors, (context_col, study_col, mechanism_col, behavior_col)
+        for col_name in columns_to_show:
+            col_info = self.available_columns.get(col_name, {})
+            
+            if col_info.get('color_type') == 'fixed':
+                # Fixed color (like study_type)
+                node_colors.extend([col_info['color']] * len(categories[col_name]))
+            else:
+                # Use color palette with offset
+                color_offset = col_info.get('color_offset', 0)
+                for i in range(len(categories[col_name])):
+                    color_idx = (i + color_offset) % len(vivid)
+                    node_colors.append(vivid[color_idx])
+        
+        return categories, node_labels, node_indices, node_colors, column_mappings
     
-    def _create_links(self, df_display, node_indices, node_colors, columns):
-        """Create links between nodes."""
-        context_col, study_col, mechanism_col, behavior_col = columns
+    def _create_links(self, df_display, node_indices, node_colors, column_mappings, columns_to_show):
+        """Create links between consecutive nodes in the specified column order."""
         links = {'source': [], 'target': [], 'value': [], 'color': []}
         
-        # Context to study type
-        for (context, study), count in df_display.groupby([context_col, study_col]).size().items():
-            if context in node_indices['context'] and study in node_indices['study']:
-                links['source'].append(node_indices['context'][context])
-                links['target'].append(node_indices['study'][study])
-                links['value'].append(count)
-                links['color'].append(self._add_transparency(node_colors[node_indices['context'][context]]))
-        
-        # Study type to mechanism
-        for (study, mechanism), count in df_display.groupby([study_col, mechanism_col]).size().items():
-            if study in node_indices['study'] and mechanism in node_indices['mechanism']:
-                links['source'].append(node_indices['study'][study])
-                links['target'].append(node_indices['mechanism'][mechanism])
-                links['value'].append(count)
-                links['color'].append(self._add_transparency(node_colors[node_indices['mechanism'][mechanism]]))
-        
-        # Mechanism to behavior
-        for (mechanism, behavior), count in df_display.groupby([mechanism_col, behavior_col]).size().items():
-            if mechanism in node_indices['mechanism'] and behavior in node_indices['behavior']:
-                links['source'].append(node_indices['mechanism'][mechanism])
-                links['target'].append(node_indices['behavior'][behavior])
-                links['value'].append(count)
-                links['color'].append(self._add_transparency(node_colors[node_indices['behavior'][behavior]]))
+        # Create links between consecutive columns
+        for i in range(len(columns_to_show) - 1):
+            source_col = columns_to_show[i]
+            target_col = columns_to_show[i + 1]
+            
+            source_col_name = column_mappings[source_col]
+            target_col_name = column_mappings[target_col]
+            
+            # Skip if columns don't exist in the dataframe
+            if source_col_name not in df_display.columns or target_col_name not in df_display.columns:
+                continue
+            
+            # Group by source and target columns to get counts
+            for (source_val, target_val), count in df_display.groupby([source_col_name, target_col_name]).size().items():
+                if (source_val in node_indices[source_col] and 
+                    target_val in node_indices[target_col]):
+                    
+                    source_idx = node_indices[source_col][source_val]
+                    target_idx = node_indices[target_col][target_val]
+                    
+                    links['source'].append(source_idx)
+                    links['target'].append(target_idx)
+                    links['value'].append(count)
+                    
+                    # Use source node color for the link
+                    links['color'].append(self._add_transparency(node_colors[source_idx]))
         
         return links
     
-    def _create_figure(self, node_labels, node_colors, links):
+    
+    
+    def _create_figure(self, node_labels, node_colors, links, columns_to_show):
         """Create the Plotly Sankey figure."""
         fig = go.Figure(data=[go.Sankey(
             node=dict(
@@ -283,6 +304,19 @@ class Sankey:
             )
         )])
         
+        # Create annotations for column headers
+        annotations = []
+        num_columns = len(columns_to_show)
+        if num_columns > 1:
+            for i, col_name in enumerate(columns_to_show):
+                display_name = self.available_columns.get(col_name, {}).get('display_name', col_name.replace('_', ' ').title())
+                x_pos = i / (num_columns - 1) if num_columns > 1 else 0.5
+                annotations.append(
+                    dict(x=x_pos, y=1.1, text=display_name, showarrow=False, 
+                         xref="paper", yref="paper",
+                         font=dict(size=16, color="black", weight="bold"))
+                )
+        
         # Update layout with enhanced styling
         fig.update_layout(
             font_size=12,
@@ -295,16 +329,7 @@ class Sankey:
                 bordercolor="black",
                 font=dict(color="black", size=14, family="Arial, sans-serif")
             ),
-            annotations=[
-                dict(x=0, y=1.1, text="Poverty Context", showarrow=False, xref="paper", yref="paper",
-                    font=dict(size=16, color="black", weight="bold")),
-                dict(x=0.33, y=1.1, text="Study Type", showarrow=False, xref="paper", yref="paper",
-                    font=dict(size=16, color="black", weight="bold")),
-                dict(x=0.66, y=1.1, text="Mechanism", showarrow=False, xref="paper", yref="paper",
-                    font=dict(size=16, color="black", weight="bold")),
-                dict(x=1, y=1.1, text="Behavior", showarrow=False, xref="paper", yref="paper",
-                    font=dict(size=16, color="black", weight="bold"))
-            ],
+            annotations=annotations,
             # Enhanced plot background for better contrast
             plot_bgcolor='rgba(248, 248, 248, 1)',
             paper_bgcolor='white'
@@ -318,47 +343,58 @@ class Sankey:
         
         return fig
     
-    def draw(self, df, active_filters=None, manual_detail_level=None):
+    def draw(self, df, columns_to_show=None, active_filters=None, manual_detail_level=None):
         """
-        Draw sankey diagram with enhanced hover contrast.
+        Draw sankey diagram with enhanced hover contrast and modular column selection.
         
         Parameters:
-        - df: DataFrame with required columns (poverty_context, study_type, mechanism, behavior)
+        - df: DataFrame with required columns
+        - columns_to_show: List of column names to display in order (e.g., ['study_type', 'mechanism'])
+                          If None, defaults to ['poverty_context', 'study_type', 'mechanism', 'behavior']
         - active_filters: Current filter state to determine detail levels
         - manual_detail_level: Optional override for detail level (1-3)
         
         Returns:
         - Plotly figure object
         """
+        # Set default columns if not specified
+        if columns_to_show is None:
+            columns_to_show = ['poverty_context', 'study_type', 'mechanism', 'behavior']
+        
+        # Validate that we have at least 2 columns for a flow diagram
+        if len(columns_to_show) < 2:
+            raise ValueError("At least 2 columns are required to create a Sankey diagram")
+        
+        # Validate that all specified columns exist in the dataframe
+        missing_columns = [col for col in columns_to_show if col not in df.columns]
+        if missing_columns:
+            raise ValueError(f"The following columns are missing from the dataframe: {missing_columns}")
+        
         # Preprocess the dataframe
-        df_clean = self._preprocess_dataframe(df.copy())
+        df_clean = self._preprocess_dataframe(df.copy(), columns_to_show)
         
         # If no hierarchy info provided, use original columns
         if self.filters_json is None or active_filters is None:
-            return self._draw_without_hierarchy(df_clean)
+            return self._draw_without_hierarchy(df_clean, columns_to_show)
         
         # Determine detail levels
         if manual_detail_level:
-            detail_levels = {
-                'poverty_context': manual_detail_level,
-                'study_type': manual_detail_level,
-                'mechanism': manual_detail_level,
-                'behavior': manual_detail_level
-            }
+            detail_levels = {col: manual_detail_level for col in columns_to_show}
         else:
-            detail_levels = self._determine_detail_levels(active_filters)
+            detail_levels = self._determine_detail_levels(active_filters, columns_to_show)
         
         # Aggregate dataframe to appropriate display level
-        df_display = self._aggregate_dataframe(df_clean, detail_levels)
+        df_display = self._aggregate_dataframe(df_clean, detail_levels, columns_to_show)
         
         # Create node structure
-        categories, node_labels, node_indices, node_colors, columns = self._create_node_structure(df_display, use_display_columns=True)
+        categories, node_labels, node_indices, node_colors, column_mappings = self._create_node_structure(
+            df_display, columns_to_show, use_display_columns=True)
         
         # Create links
-        links = self._create_links(df_display, node_indices, node_colors, columns)
+        links = self._create_links(df_display, node_indices, node_colors, column_mappings, columns_to_show)
         
         # Create and return figure
-        return self._create_figure(node_labels, node_colors, links)
+        return self._create_figure(node_labels, node_colors, links, columns_to_show)
     
     def _draw_without_hierarchy(self, df):
         """Fallback method for drawing without hierarchy information."""
