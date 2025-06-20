@@ -1,7 +1,7 @@
 import pandas as pd
 import json
 import logging
-from data import openAlex, googleSheets
+from data import openAlex, googleSheets, bigQuery
 from featureEngineering import encoder, labels
 from classificationAlgos import nearestNeighbor, largelanguageModel
 from data.ETL.utils import clustering, density
@@ -35,7 +35,7 @@ class ETLPipeline():
         self.poverty_contexts = self.labels['poverty_contexts']
         self.mechanisms = self.labels['mechanisms']
         self.credentials_json = credentials_json
-        self.google_sheets = googleSheets.API(credentials_json=self.credentials_json)
+        self.google_sheets = bigQuery.Client(credentials_json=self.credentials_json)
         self.spreadsheet_id_json = spreadsheet_id_json
 
     def _load_examples(self):

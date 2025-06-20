@@ -1,29 +1,34 @@
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
+import streamlit as st
+from functools import lru_cache
+import hashlib
+from typing import Dict, List, Optional, Any
+import numpy as np
 
 
 class Sankey:
     """
-    A class for creating hierarchical Sankey diagrams with dynamic aggregation levels and modular node selection.
-    
-    This class creates Sankey diagrams that can display data at different levels of detail
-    based on active filters and hierarchy information, with full control over which nodes to display.
+    High-performance Sankey class with optimized caching and filtering.
     """
     
     def __init__(self, filters_json=None, default_colors=None):
-        """
-        Initialize the SankeyDiagram.
-        
-        Parameters:
-        - filters_json: Dictionary containing hierarchy information for categories
-        - default_colors: Custom color palette (defaults to Plotly Vivid)
-        """
         self.filters_json = filters_json
         self.default_colors = default_colors or px.colors.qualitative.Vivid
         self.mappers = None
         
-        # Define all available columns and their hierarchy keys
+        # Enhanced caching system
+        self._preprocessed_data = None
+        self._preprocessed_hash = None
+        self._filter_cache = {}
+        self._aggregation_cache = {}
+        self._node_cache = {}
+        
+        # Pre-computed data for faster filtering
+        self._value_counts_cache = {}
+        self._unique_values_cache = {}
+        
         self.available_columns = {
             'poverty_context': {
                 'hierarchy_key': 'poverty_contexts',
@@ -50,17 +55,240 @@ class Sankey:
         if filters_json:
             self.mappers = self._create_hierarchy_mappers()
     
+    def _create_stable_hash(self, *args) -> str:
+        """Create stable hash from multiple arguments."""
+        content = str(args)
+        return hashlib.md5(content.encode()).hexdigest()[:16]
+    
+    @lru_cache(maxsize=128)
+    def _get_hierarchy_mapping(self, col_name: str, detail_level: int):
+        """Cached hierarchy mapping for better performance."""
+        if not self.mappers or col_name not in self.mappers:
+            return None
+        
+        # Pre-compute all possible mappings for this column and level
+        mapper = self.mappers[col_name]
+        return lambda x: mapper(x, detail_level)
+    
+    def _preprocess_dataframe(self, df: pd.DataFrame, columns_to_show: List[str]) -> pd.DataFrame:
+        """One-time preprocessing with aggressive caching."""
+        df_info = (df.shape, tuple(df.columns), tuple(columns_to_show))
+        current_hash = self._create_stable_hash(df_info)
+        
+        if self._preprocessed_hash == current_hash and self._preprocessed_data is not None:
+            return self._preprocessed_data
+        
+        # Reset caches when base data changes
+        self._filter_cache.clear()
+        self._aggregation_cache.clear()
+        self._node_cache.clear()
+        self._value_counts_cache.clear()
+        self._unique_values_cache.clear()
+        
+        # Efficient preprocessing
+        existing_columns = [col for col in columns_to_show if col in df.columns]
+        result_df = df[existing_columns].copy()
+        
+        # Vectorized operations for better performance
+        exclude_values = {'Insufficient info'}
+        
+        # Single pass for all exclusions
+        mask = pd.Series(True, index=result_df.index)
+        
+        for col in existing_columns:
+            col_mask = (
+                result_df[col].notna() & 
+                ~result_df[col].isin(exclude_values)
+            )
+            mask &= col_mask
+            
+            # Pre-compute and cache value counts
+            if col in ['poverty_context', 'mechanism', 'study_type']:
+                value_counts = result_df[col].value_counts()
+                self._value_counts_cache[col] = value_counts
+                mask &= result_df[col].map(value_counts) > 2
+            
+            # Cache unique values
+            self._unique_values_cache[col] = result_df[col].unique()
+        
+        result_df = result_df[mask]
+        
+        # Convert categorical columns for better memory usage
+        for col in existing_columns:
+            if result_df[col].dtype == 'object':
+                result_df[col] = result_df[col].astype('category')
+        
+        self._preprocessed_data = result_df
+        self._preprocessed_hash = current_hash
+        
+        return result_df
+    
+    def _apply_filters_optimized(self, df: pd.DataFrame, filters: Dict[str, Any]) -> pd.DataFrame:
+        """Optimized filtering with better caching."""
+        if not filters:
+            return df
+        
+        # Create cache key
+        filter_key = self._create_stable_hash(df.shape, tuple(sorted(filters.items())))
+        
+        if filter_key in self._filter_cache:
+            return self._filter_cache[filter_key]
+        
+        # Apply filters using vectorized operations
+        mask = pd.Series(True, index=df.index)
+        
+        filter_mapping = {
+            'contexts': 'poverty_context',
+            'study_types': 'study_type',
+            'mechanisms': 'mechanism',
+            'behaviors': 'behavior'
+        }
+        
+        for filter_name, filter_values in filters.items():
+            if filter_values and filter_name in filter_mapping:
+                col_name = filter_mapping[filter_name]
+                if col_name in df.columns:
+                    # Use efficient isin operation
+                    mask &= df[col_name].isin(filter_values)
+        
+        result_df = df[mask]
+        
+        # Cache result (limit cache size)
+        if len(self._filter_cache) > 50:
+            # Remove oldest entries
+            old_keys = list(self._filter_cache.keys())[:25]
+            for key in old_keys:
+                del self._filter_cache[key]
+        
+        self._filter_cache[filter_key] = result_df
+        return result_df
+    
+    def _create_aggregated_data(self, df: pd.DataFrame, detail_levels: Dict[str, int], 
+                               columns_to_show: List[str]) -> pd.DataFrame:
+        """Optimized aggregation with caching."""
+        cache_key = self._create_stable_hash(
+            df.shape, tuple(sorted(detail_levels.items())), tuple(columns_to_show)
+        )
+        
+        if cache_key in self._aggregation_cache:
+            return self._aggregation_cache[cache_key]
+        
+        if not self.mappers:
+            self._aggregation_cache[cache_key] = df
+            return df
+        
+        # Efficient column mapping
+        df_display = df.copy()
+        
+        for col_name in columns_to_show:
+            if col_name in self.mappers and col_name in detail_levels:
+                detail_level = detail_levels[col_name]
+                mapping_func = self._get_hierarchy_mapping(col_name, detail_level)
+                
+                if mapping_func:
+                    display_col = f'display_{col_name}'
+                    # Vectorized application
+                    df_display[display_col] = df_display[col_name].apply(mapping_func)
+        
+        # Cache with size limit
+        if len(self._aggregation_cache) > 20:
+            old_keys = list(self._aggregation_cache.keys())[:10]
+            for key in old_keys:
+                del self._aggregation_cache[key]
+        
+        self._aggregation_cache[cache_key] = df_display
+        return df_display
+    
+    def _create_links_optimized(self, df_display: pd.DataFrame, node_indices: Dict, 
+                               node_colors: List, column_mappings: Dict, 
+                               columns_to_show: List[str]) -> Dict:
+        """Optimized link creation using vectorized operations."""
+        links = {'source': [], 'target': [], 'value': [], 'color': []}
+        
+        # Process all column pairs efficiently
+        for i in range(len(columns_to_show) - 1):
+            source_col = columns_to_show[i]
+            target_col = columns_to_show[i + 1]
+            
+            source_col_name = column_mappings[source_col]
+            target_col_name = column_mappings[target_col]
+            
+            if source_col_name not in df_display.columns or target_col_name not in df_display.columns:
+                continue
+            
+            # Efficient groupby with size
+            grouped = df_display.groupby([source_col_name, target_col_name], observed=True).size()
+            
+            # Vectorized processing of groups
+            for (source_val, target_val), count in grouped.items():
+                if (source_val in node_indices[source_col] and 
+                    target_val in node_indices[target_col]):
+                    
+                    source_idx = node_indices[source_col][source_val]
+                    target_idx = node_indices[target_col][target_val]
+                    
+                    links['source'].append(source_idx)
+                    links['target'].append(target_idx)
+                    links['value'].append(int(count))  # Ensure int for JSON serialization
+                    links['color'].append(self._add_transparency(node_colors[source_idx]))
+        
+        return links
+    
+    def _determine_detail_levels(self, active_filters, columns_to_show):
+        """Cached detail level determination."""
+        cache_key = self._create_stable_hash(active_filters, columns_to_show)
+        
+        if hasattr(self, '_detail_levels_cache'):
+            if cache_key in self._detail_levels_cache:
+                return self._detail_levels_cache[cache_key]
+        else:
+            self._detail_levels_cache = {}
+        
+        detail_levels = {}
+        max_depths = {}
+        
+        if self.filters_json:
+            for col_name in columns_to_show:
+                if col_name in self.available_columns:
+                    hierarchy_key = self.available_columns[col_name]['hierarchy_key']
+                    max_depths[col_name] = self._get_max_depth(self.filters_json.get(hierarchy_key, {}))
+        else:
+            for col_name in columns_to_show:
+                max_depths[col_name] = 2
+        
+        base_level = 1
+        filter_key_to_column = {
+            'contexts': 'poverty_context',
+            'study_types': 'study_type', 
+            'mechanisms': 'mechanism',
+            'behaviors': 'behavior'
+        }
+        
+        for col_name in columns_to_show:
+            filter_key = None
+            for fk, cn in filter_key_to_column.items():
+                if cn == col_name:
+                    filter_key = fk
+                    break
+            
+            if filter_key and active_filters.get(filter_key):
+                detail_levels[col_name] = max_depths.get(col_name, base_level)
+            else:
+                detail_levels[col_name] = base_level
+        
+        self._detail_levels_cache[cache_key] = detail_levels
+        return detail_levels
+    
+    # Keep existing helper methods with minimal changes
     def _find_item_path(self, item, data, path=[]):
         """Recursively find the full path to an item in nested data structure."""
         for key, value in data.items():
             current_path = path + [key]
             if isinstance(value, dict):
-                # Recurse into nested dictionaries
                 result = self._find_item_path(item, value, current_path)
                 if result:
                     return result
             elif isinstance(value, list):
-                # Check if item is in this list
                 if item in value:
                     return current_path + [item]
         return None
@@ -77,7 +305,6 @@ class Sankey:
             
             def create_mapper(hierarchy_key):
                 def mapper(specific_value, target_level=1):
-                    """Map value to broader category with variable depth handling."""
                     if hierarchy_key not in self.filters_json:
                         return specific_value
                     
@@ -85,9 +312,8 @@ class Sankey:
                     if path and len(path) >= target_level:
                         return path[target_level - 1]
                     elif path:
-                        # If target level is deeper than available, return the deepest available
                         return path[-1]
-                    return specific_value  # fallback if not found
+                    return specific_value
                 return mapper
             
             mappers[col_name] = create_mapper(hierarchy_key)
@@ -105,86 +331,6 @@ class Sankey:
                     max_depth = max(max_depth, current_depth + 1)
         return max_depth
     
-    def _determine_detail_levels(self, active_filters, columns_to_show):
-        """Determine appropriate detail level for each category based on active filters."""
-        detail_levels = {}
-        
-        # Get maximum depths for each category that will be shown
-        max_depths = {}
-        if self.filters_json:
-            for col_name in columns_to_show:
-                if col_name in self.available_columns:
-                    hierarchy_key = self.available_columns[col_name]['hierarchy_key']
-                    max_depths[col_name] = self._get_max_depth(self.filters_json.get(hierarchy_key, {}))
-        else:
-            # Default max depths if no filter info available
-            for col_name in columns_to_show:
-                max_depths[col_name] = 2
-        
-        # Default to broadest level
-        base_level = 1
-        
-        # Map active_filters keys to column names
-        filter_key_to_column = {
-            'contexts': 'poverty_context',
-            'study_types': 'study_type', 
-            'mechanisms': 'mechanism',
-            'behaviors': 'behavior'
-        }
-        
-        # If any filters are active, show the deepest level for ONLY those specific categories
-        for col_name in columns_to_show:
-            # Find the corresponding filter key
-            filter_key = None
-            for fk, cn in filter_key_to_column.items():
-                if cn == col_name:
-                    filter_key = fk
-                    break
-            
-            if filter_key and active_filters.get(filter_key):
-                detail_levels[col_name] = max_depths.get(col_name, base_level)
-            else:
-                detail_levels[col_name] = base_level
-        
-        return detail_levels
-    
-    def _aggregate_dataframe(self, df, detail_levels, columns_to_show):
-        """Create display columns with appropriate aggregation level."""
-        if not self.mappers:
-            return df
-            
-        df_display = df.copy()
-        
-        # Apply mapping for each column that will be shown
-        for col_name in columns_to_show:
-            if col_name in self.mappers and col_name in detail_levels:
-                display_col = f'display_{col_name}'
-                df_display[display_col] = df_display[col_name].apply(
-                    lambda x: self.mappers[col_name](x, detail_levels[col_name])
-                )
-        
-        return df_display
-    
-    def _preprocess_dataframe(self, df, columns_to_show):
-        """Clean and filter the dataframe before processing."""
-        # Only apply preprocessing to columns that will be shown and exist in the dataframe
-        existing_columns = [col for col in columns_to_show if col in df.columns]
-        
-        # Filter categories with counts > 2 (only for specific columns)
-        filter_count_columns = ['poverty_context', 'mechanism', 'study_type']
-        for col in filter_count_columns:
-            if col in existing_columns:
-                df = df[df[col].map(df[col].value_counts()) > 2]
-
-        # Drop all null values and 'Insufficient info' values
-        exclude_values = ['Insufficient info']
-        
-        for col in existing_columns:
-            df = df[df[col].notnull()]
-            df = df[~df[col].isin(exclude_values)]
-        
-        return df
-    
     def _add_transparency(self, color, alpha=0.4):
         """Add transparency to a color."""
         if color.startswith('#'):
@@ -195,8 +341,14 @@ class Sankey:
         return f'rgba(128,128,128,{alpha})'
     
     def _create_node_structure(self, df_display, columns_to_show, use_display_columns=True):
-        """Create node labels, indices, and colors for specified columns only."""
-        # Determine which columns to use
+        """Optimized node structure creation with caching."""
+        cache_key = self._create_stable_hash(
+            df_display.shape, tuple(columns_to_show), use_display_columns
+        )
+        
+        if cache_key in self._node_cache:
+            return self._node_cache[cache_key]
+        
         column_mappings = {}
         for col_name in columns_to_show:
             if use_display_columns and f'display_{col_name}' in df_display.columns:
@@ -204,15 +356,20 @@ class Sankey:
             else:
                 column_mappings[col_name] = col_name
         
-        # Get unique values for each category that will be shown
+        # Efficient unique value extraction
         categories = {}
         for col_name in columns_to_show:
-            if column_mappings[col_name] in df_display.columns:
-                categories[col_name] = df_display[column_mappings[col_name]].unique().tolist()
+            mapped_col = column_mappings[col_name]
+            if mapped_col in df_display.columns:
+                # Use pandas categorical if available for faster unique()
+                if df_display[mapped_col].dtype.name == 'category':
+                    categories[col_name] = df_display[mapped_col].cat.categories.tolist()
+                else:
+                    categories[col_name] = df_display[mapped_col].unique().tolist()
             else:
                 categories[col_name] = []
         
-        # Create node labels and indices
+        # Create node structure efficiently
         node_labels = []
         node_indices = {}
         current_index = 0
@@ -224,7 +381,7 @@ class Sankey:
                 node_labels.append(label)
                 current_index += 1
         
-        # Assign colors using the color palette
+        # Efficient color assignment
         vivid = self.default_colors
         node_colors = []
         
@@ -232,51 +389,23 @@ class Sankey:
             col_info = self.available_columns.get(col_name, {})
             
             if col_info.get('color_type') == 'fixed':
-                # Fixed color (like study_type)
                 node_colors.extend([col_info['color']] * len(categories[col_name]))
             else:
-                # Use color palette with offset
                 color_offset = col_info.get('color_offset', 0)
                 for i in range(len(categories[col_name])):
                     color_idx = (i + color_offset) % len(vivid)
                     node_colors.append(vivid[color_idx])
         
-        return categories, node_labels, node_indices, node_colors, column_mappings
-    
-    def _create_links(self, df_display, node_indices, node_colors, column_mappings, columns_to_show):
-        """Create links between consecutive nodes in the specified column order."""
-        links = {'source': [], 'target': [], 'value': [], 'color': []}
+        result = (categories, node_labels, node_indices, node_colors, column_mappings)
         
-        # Create links between consecutive columns
-        for i in range(len(columns_to_show) - 1):
-            source_col = columns_to_show[i]
-            target_col = columns_to_show[i + 1]
-            
-            source_col_name = column_mappings[source_col]
-            target_col_name = column_mappings[target_col]
-            
-            # Skip if columns don't exist in the dataframe
-            if source_col_name not in df_display.columns or target_col_name not in df_display.columns:
-                continue
-            
-            # Group by source and target columns to get counts
-            for (source_val, target_val), count in df_display.groupby([source_col_name, target_col_name]).size().items():
-                if (source_val in node_indices[source_col] and 
-                    target_val in node_indices[target_col]):
-                    
-                    source_idx = node_indices[source_col][source_val]
-                    target_idx = node_indices[target_col][target_val]
-                    
-                    links['source'].append(source_idx)
-                    links['target'].append(target_idx)
-                    links['value'].append(count)
-                    
-                    # Use source node color for the link
-                    links['color'].append(self._add_transparency(node_colors[source_idx]))
+        # Cache with size limit
+        if len(self._node_cache) > 30:
+            old_keys = list(self._node_cache.keys())[:15]
+            for key in old_keys:
+                del self._node_cache[key]
         
-        return links
-    
-    
+        self._node_cache[cache_key] = result
+        return result
     
     def _create_figure(self, node_labels, node_colors, links, columns_to_show):
         """Create the Plotly Sankey figure."""
@@ -284,10 +413,9 @@ class Sankey:
             node=dict(
                 pad=15,
                 thickness=20,
-                line=dict(color="black", width=2),  # Darker, thicker border for better contrast
+                line=dict(color="black", width=2),
                 label=node_labels,
                 color=node_colors,
-                # Enhanced hover template for nodes
                 hovertemplate="<b>%{label}</b><br>" +
                              "Connections: %{value}<br>" +
                              "<extra></extra>"
@@ -297,7 +425,6 @@ class Sankey:
                 target=links['target'],
                 value=links['value'],
                 color=links['color'],
-                # Enhanced hover template for links
                 hovertemplate="<b>%{source.label}</b> → <b>%{target.label}</b><br>" +
                              "Count: <b>%{value}</b><br>" +
                              "<extra></extra>"
@@ -316,13 +443,18 @@ class Sankey:
                          xref="paper", yref="paper",
                          font=dict(size=16, color="black", weight="bold"))
                 )
+
+        annotations.append(
+            dict(x=0.5, y=-0.15, 
+                 text="Note: Papers with multiple contexts or mechanisms appear separately for each category",
+                 showarrow=False, xref="paper", yref="paper",
+                 font=dict(size=12, color="gray", style="italic"))
+        )
         
-        # Update layout with enhanced styling
         fig.update_layout(
             font_size=12,
             height=600,
             width=1200,
-            # Enhanced hover mode and styling
             hovermode='closest',
             hoverlabel=dict(
                 bgcolor="white",
@@ -330,12 +462,10 @@ class Sankey:
                 font=dict(color="black", size=14, family="Arial, sans-serif")
             ),
             annotations=annotations,
-            # Enhanced plot background for better contrast
             plot_bgcolor='rgba(248, 248, 248, 1)',
             paper_bgcolor='white'
         )
         
-        # Update traces with enhanced text styling
         fig.update_traces(
             textfont=dict(color='black', size=14, family="Arial Black"),
             selector=dict(type='sankey')
@@ -343,79 +473,128 @@ class Sankey:
         
         return fig
     
-    def draw(self, df, columns_to_show=None, active_filters=None, manual_detail_level=None):
+    def draw(self, df: pd.DataFrame, columns_to_show: Optional[List[str]] = None, 
+         active_filters: Optional[Dict[str, Any]] = None, manual_detail_level: Optional[int] = None):
         """
-        Draw sankey diagram with enhanced hover contrast and modular column selection.
-        
-        Parameters:
-        - df: DataFrame with required columns
-        - columns_to_show: List of column names to display in order (e.g., ['study_type', 'mechanism'])
-                          If None, defaults to ['poverty_context', 'study_type', 'mechanism', 'behavior']
-        - active_filters: Current filter state to determine detail levels
-        - manual_detail_level: Optional override for detail level (1-3)
-        
-        Returns:
-        - Plotly figure object
+        Optimized draw method with improved caching and performance.
         """
-        # Set default columns if not specified
-        if columns_to_show is None:
-            columns_to_show = ['poverty_context', 'study_type', 'mechanism', 'behavior']
+        # Create progress bar
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        # Validate that we have at least 2 columns for a flow diagram
-        if len(columns_to_show) < 2:
-            raise ValueError("At least 2 columns are required to create a Sankey diagram")
-        
-        # Validate that all specified columns exist in the dataframe
-        missing_columns = [col for col in columns_to_show if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"The following columns are missing from the dataframe: {missing_columns}")
-        
-        # Preprocess the dataframe
-        df_clean = self._preprocess_dataframe(df.copy(), columns_to_show)
-        
-        # If no hierarchy info provided, use original columns
-        if self.filters_json is None or active_filters is None:
-            return self._draw_without_hierarchy(df_clean, columns_to_show)
-        
-        # Determine detail levels
-        if manual_detail_level:
-            detail_levels = {col: manual_detail_level for col in columns_to_show}
-        else:
-            detail_levels = self._determine_detail_levels(active_filters, columns_to_show)
-        
-        # Aggregate dataframe to appropriate display level
-        df_display = self._aggregate_dataframe(df_clean, detail_levels, columns_to_show)
-        
-        # Create node structure
+        try:
+            # Set defaults
+            status_text.text(" ")
+            progress_bar.progress(10)
+            
+            if columns_to_show is None:
+                columns_to_show = ['poverty_context', 'study_type', 'mechanism', 'behavior']
+            
+            active_filters = active_filters or {}
+            
+            # Validate inputs
+            if len(columns_to_show) < 2:
+                raise ValueError("At least 2 columns are required to create a Sankey diagram")
+            
+            missing_columns = [col for col in columns_to_show if col not in df.columns]
+            if missing_columns:
+                raise ValueError(f"The following columns are missing from the dataframe: {missing_columns}")
+            
+            # Step 1: Preprocess data
+            status_text.text(" ")
+            progress_bar.progress(25)
+            df_clean = self._preprocess_dataframe(df, columns_to_show)
+            
+            # Step 2: Apply filters
+            status_text.text(" ")
+            progress_bar.progress(40)
+            df_filtered = self._apply_filters_optimized(df_clean, active_filters)
+            
+            # Early return for empty data
+            if df_filtered.empty:
+                status_text.text("No data found matching filters")
+                progress_bar.progress(100)
+                return go.Figure().add_annotation(
+                    text="No data matches the current filters",
+                    x=0.5, y=0.5, showarrow=False,
+                    font=dict(size=20, color="gray")
+                )
+            
+            # Handle case without hierarchy
+            if self.filters_json is None:
+                status_text.text(" ")
+                progress_bar.progress(80)
+                result = self._draw_without_hierarchy(df_filtered, columns_to_show)
+                progress_bar.progress(100)
+                return result
+            
+            # Step 3: Determine detail levels
+            status_text.text(" ")
+            progress_bar.progress(55)
+            if manual_detail_level:
+                detail_levels = {col: manual_detail_level for col in columns_to_show}
+            else:
+                detail_levels = self._determine_detail_levels(active_filters, columns_to_show)
+            
+            # Step 4: Create aggregated data
+            status_text.text(" ")
+            progress_bar.progress(65)
+            df_display = self._create_aggregated_data(df_filtered, detail_levels, columns_to_show)
+            
+            # Step 5: Create visualization components
+            status_text.text(" ")
+            progress_bar.progress(75)
+            categories, node_labels, node_indices, node_colors, column_mappings = self._create_node_structure(
+                df_display, columns_to_show, use_display_columns=True)
+            
+            # Step 6: Create links
+            status_text.text(" ")
+            progress_bar.progress(85)
+            links = self._create_links_optimized(df_display, node_indices, node_colors, column_mappings, columns_to_show)
+            
+            # Step 7: Create figure
+            status_text.text(" ")
+            progress_bar.progress(95)
+            result = self._create_figure(node_labels, node_colors, links, columns_to_show)
+            
+            status_text.text(" ")
+            progress_bar.progress(100)
+            return result
+            
+        finally:
+            # Clean up progress indicators after a short delay
+            import time
+            time.sleep(0.5)
+            progress_bar.empty()
+            status_text.empty()
+    
+    def _draw_without_hierarchy(self, df, columns_to_show):
+        """Fallback method for drawing without hierarchy information."""
         categories, node_labels, node_indices, node_colors, column_mappings = self._create_node_structure(
-            df_display, columns_to_show, use_display_columns=True)
+            df, columns_to_show, use_display_columns=False)
         
-        # Create links
-        links = self._create_links(df_display, node_indices, node_colors, column_mappings, columns_to_show)
+        links = self._create_links_optimized(df, node_indices, node_colors, column_mappings, columns_to_show)
         
-        # Create and return figure
         return self._create_figure(node_labels, node_colors, links, columns_to_show)
     
-    def _draw_without_hierarchy(self, df):
-        """Fallback method for drawing without hierarchy information."""
-        # Create node structure using original columns
-        categories, node_labels, node_indices, node_colors, columns = self._create_node_structure(df, use_display_columns=False)
+    def clear_cache(self):
+        """Clear all caches for memory management."""
+        self._filter_cache.clear()
+        self._aggregation_cache.clear()
+        self._node_cache.clear()
+        self._value_counts_cache.clear()
+        self._unique_values_cache.clear()
+        if hasattr(self, '_detail_levels_cache'):
+            self._detail_levels_cache.clear()
         
-        # Create links
-        links = self._create_links(df, node_indices, node_colors, columns)
-        
-        # Create and return figure
-        return self._create_figure(node_labels, node_colors, links)
+        # Clear LRU cache
+        self._get_hierarchy_mapping.cache_clear()
     
-    def set_filters_json(self, filters_json):
-        """Update the filters_json and recreate mappers."""
-        self.filters_json = filters_json
-        if filters_json:
-            self.mappers = self._create_hierarchy_mappers()
-        else:
-            self.mappers = None
-    
-    def set_colors(self, colors):
-        """Update the color palette."""
-        self.default_colors = colors
-
+    def get_cache_stats(self):
+        """Get cache statistics for debugging."""
+        return {
+            'filter_cache_size': len(self._filter_cache),
+            'aggregation_cache_size': len(self._aggregation_cache),
+            'node_cache_size': len(self._node_cache),
+            'hierarchy_cache_info': self._get_hierarchy_mapping.cache_info()
+        }
