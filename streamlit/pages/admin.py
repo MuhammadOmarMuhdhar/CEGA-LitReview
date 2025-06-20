@@ -9,7 +9,7 @@ from data.ETL import main
 from datetime import datetime
 from dotenv import load_dotenv
 from streamlit_gsheets import GSheetsConnection
-from data.googleSheets import API
+from data.bigQuery import Client
 import json
 
 # Function to load environment variables with Streamlit compatibility
@@ -168,44 +168,37 @@ def initialize_pipeline():
 data_pipeline = initialize_pipeline()
 
 @st.dialog("Confirm Deletion")
-def confirm_delete_dialog(paper_title, papers_df, google_sheets_connection, spreadsheet_ids, database_to_update, key):
+def confirm_delete_dialog(paper_title, papers_df, client, key):
     """
     Confirmation dialog for paper deletion
     """
     st.write(f"Are you sure you want to delete this paper?")
     st.markdown(f"**Title:** {paper_title}")
-    
     col1, col2, col3 = st.columns([1, 1, 1])
-    
     with col2:
         if st.button("❌ Cancel", key=f"cancel_{key}", use_container_width=True):
             st.rerun()
-    
     with col3:
         if st.button("🗑️ Delete", key=f"confirm_{key}", type="primary", use_container_width=True):
             # Show spinner during deletion
             with st.spinner("Deleting paper from database..."):
-                # Delete the paper
-                paper_index = papers_df.index[0]
-                updated_db = database_to_update.drop(paper_index).reset_index(drop=True)
-                
-                # Save changes back to Google Sheets
-                google_sheets_connection.replace(
-                    spreadsheet_id=spreadsheet_ids['papers'],
-                    df=updated_db
+                # Delete the paper from BigQuery
+                paper_data = papers_df.iloc[0]
+                client.execute_query(
+                    f"""
+                    DELETE FROM `literature-452020.psychology_of_poverty_literature.papers`
+                    WHERE title = '{paper_data["title"]}' AND doi = '{paper_data.get("doi", "")}'
+                    """
                 )
-            
-            st.success("Paper deleted successfully!")
-            st.rerun()
+                st.success("Paper deleted successfully!")
+                st.rerun()
 
-def display_paper_details(papers_df, key=None, show_delete=False, google_sheets_connection=None,
-                         spreadsheet_ids=None, database_to_update=None):
+def display_paper_details(papers_df, key=None, show_delete=False, client=None):
     """
     Display paper details with optional delete functionality
     """
     # Drop down to select paper
     with st.expander("Human Review", expanded=True):
-        
         # Delete button at the top if enabled
         if show_delete:
             # Create columns for spacing and delete button
@@ -219,23 +212,17 @@ def display_paper_details(papers_df, key=None, show_delete=False, google_sheets_
                         confirm_delete_dialog(
                             selected_paper,
                             selected_paper_details,
-                            google_sheets_connection,
-                            spreadsheet_ids,
-                            database_to_update,
+                            client,
                             key
                         )
-        
         # Select paper dropdown with improved styling
         selected_paper = st.selectbox(" ", papers_df['title'].unique(), key=f"select_{key}")
-        
         # Store selected paper in session state for delete function
         st.session_state['selected_paper_temp'] = selected_paper
-        
         # Display the selected paper's details
         selected_paper_details = papers_df[papers_df['title'] == selected_paper]
         # format all list values in the dataframe to string
         selected_paper_details = selected_paper_details.applymap(lambda x: ', '.join(x) if isinstance(x, list) else x)
-        
         # Display paper information
         st.markdown(f"**Title:** {selected_paper_details['title'].values[0]}")
         st.markdown(f"**Study Type:** {selected_paper_details['study_type'].values[0]}")
@@ -246,48 +233,17 @@ def display_paper_details(papers_df, key=None, show_delete=False, google_sheets_
         st.markdown(f"**Abstract:** {selected_paper_details['abstract'].values[0]}")
 
 
-
     
-# And for adding new papers:
-def add_paper_with_spinner(new_paper, database_to_update, google_sheets_connection, spreadsheet_ids):
-    """
-    Add New Paper Manually with spinner feedback
-    """
-    with st.spinner("Adding new paper to database..."):
-        # Add to dataframe
-        new_row = pd.DataFrame([new_paper])
-        database_to_update = pd.concat([database_to_update, new_row], ignore_index=True)
-        
-        # Save changes back to Google Sheets
-        google_sheets_connection.replace(
-            spreadsheet_id=spreadsheet_ids['papers'],
-            df=database_to_update
-        )
-    
-    st.success("New paper added successfully!")
-    return database_to_update
 
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_data():
-    """Load data from Google Sheets with caching"""
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        papers_url = 'https://docs.google.com/spreadsheets/d/1nrZC6zJ50DouMCHIWZOl-tQ4BAZfEojJymtzUh26nP0/edit?usp=sharing'
-        topics_url = 'https://docs.google.com/spreadsheets/d/1cspghq8R0Xlf2jk0TacGv8bC6C4EGIUnGuUQJWYASpk/edit?usp=sharing'
+@st.cache_resource
+def get_bigquery_client():
+    return Client(credentials, 'literature-452020')
 
-        papers_df = conn.read(spreadsheet=papers_url)
-        topics_df = conn.read(spreadsheet=topics_url)
+client = get_bigquery_client()
 
-        return papers_df, topics_df
-    except Exception as e:
-        st.error(f"Error loading data: {str(e)}")
-        return pd.DataFrame(), pd.DataFrame()
 
-google_sheets_connection = API(credentials_json=credentials)
-database_to_update = google_sheets_connection.read(
-        spreadsheet_id=spreadsheet_ids['papers']
-    )
+
 
 # Main content
 tab1, tab2, tab3, tab4 = st.tabs(["Update Database", "View Data", "Edit Database", "Logs"])
@@ -341,28 +297,26 @@ with tab1:
     with col2:
         if st.session_state.data_fetched:
              display_paper_details(
-                    st.session_state.papers, 
-                    key="loading_papers",
-                    show_delete=True,
-                    google_sheets_connection=google_sheets_connection,
-                    spreadsheet_ids=spreadsheet_ids,
-                    database_to_update=database_to_update
+                st.session_state.papers,
+                key="loading_papers",
+                show_delete=True,
+                client=client
                 )
 
-with tab2:
-    st.header("View Data")
-    # papers_df, topics_df = load_data()
-    if not database_to_update.empty:
-        st.dataframe(database_to_update[['doi', 'title', 'authors', 'abstract', 'country', 'institution', 'study_type', 'poverty_context', 'mechanism', 'behavior']], use_container_width=True)
-    else:
-        st.info("No data available")
+# with tab2:
+#     st.header("View Data")
+#     # papers_df, topics_df = load_data()
+#     if not database_to_update.empty:
+#         st.dataframe(database_to_update[['doi', 'title', 'authors', 'abstract', 'country', 'institution', 'study_type', 'poverty_context', 'mechanism', 'behavior']], use_container_width=True)
+#     else:
+#         st.info("No data available")
 
-    # button to reload with st.rerun
-    if st.button("Reload Data"):
-        with st.spinner("Reloading data..."):
-            # Clear cache and reload
-            load_data.clear()
-            st.rerun()
+#     # button to reload with st.rerun
+#     if st.button("Reload Data"):
+#         with st.spinner("Reloading data..."):
+#             # Clear cache and reload
+#             load_data.clear()
+#             st.rerun()
 
 with tab3:
 
@@ -374,11 +328,15 @@ with tab3:
     label_data = get_categories_and_keys(labels)
 
     if doi and doi.strip():
-        # Fixed boolean indexing for pandas
-        paper_data = database_to_update[
-            (database_to_update['doi'] == doi) | 
-            (database_to_update['title'].str.lower() == doi.lower())
-        ]
+        # Query BigQuery for paper data
+        paper_data = client.execute_query(
+            f"""
+            SELECT abstract, title, authors, study_type, poverty_context, mechanism, behavior, doi
+            FROM `literature-452020.psychology_of_poverty_literature.papers`
+            WHERE doi = '{doi}' OR title = '{doi}'
+            LIMIT 1
+            """
+        )
         
         # Now create the main content columns
         col1, col2 = st.columns(2)
@@ -389,9 +347,7 @@ with tab3:
                     paper_data, 
                     key="edit_database",
                     show_delete=True,
-                    google_sheets_connection=google_sheets_connection,
-                    spreadsheet_ids=spreadsheet_ids,
-                    database_to_update=database_to_update
+                    client=client
                 )
             else:
                 st.info("Paper not found in database")
@@ -448,17 +404,17 @@ with tab3:
                     if submit_button:
                         with st.spinner("Updating paper in database..."):
                             try:
-                                # Update the paper data with comma-separated values
-                                paper_index = paper_data.index[0]
-                                database_to_update.at[paper_index, 'study_type'] = ', '.join(study_types) if study_types else ''
-                                database_to_update.at[paper_index, 'poverty_context'] = ', '.join(poverty_contexts) if poverty_contexts else ''
-                                database_to_update.at[paper_index, 'mechanism'] = ', '.join(mechanisms) if mechanisms else ''
-                                database_to_update.at[paper_index, 'behavior'] = ', '.join(behaviors) if behaviors else ''
-                                
-                                # Save changes back to Google Sheets
-                                google_sheets_connection.replace(
-                                    spreadsheet_id=spreadsheet_ids['papers'],
-                                    df=database_to_update
+                                # Update the paper in BigQuery
+                                client.execute_query(
+                                    f"""
+                                    UPDATE `literature-452020.psychology_of_poverty_literature.papers`
+                                    SET 
+                                        study_type = '{", ".join(study_types) if study_types else ""}',
+                                        poverty_context = '{", ".join(poverty_contexts) if poverty_contexts else ""}',
+                                        mechanism = '{", ".join(mechanisms) if mechanisms else ""}',
+                                        behavior = '{", ".join(behaviors) if behaviors else ""}'
+                                    WHERE doi = '{current_paper["doi"]}' OR title = '{current_paper["title"]}'
+                                    """
                                 )
                                 st.success("Paper details updated successfully!")
                                 
@@ -470,7 +426,7 @@ with tab3:
             # Add New Paper Manually section
             else:
                 with st.form("add_form"):
-                    st.markdown("### Add New Paper Manually Manually")
+                    st.markdown("### Add New Paper Manually")
                     
                     # Input fields for new paper
                     new_title = st.text_input("Title", value=doi if doi else "")
@@ -486,33 +442,29 @@ with tab3:
                     new_mechanisms = st.multiselect("Mechanisms", options=label_data['mechanisms'])
                     new_behaviors = st.multiselect("Behaviors", options=label_data['Behaviors'])
                     
-                    add_button = st.form_submit_button(label="Add New Paper Manually")
+                    add_button = st.form_submit_button(label="Add New Paper")
                     
                     if add_button:
                         with st.spinner("Adding new paper to database..."):
                             try:
-                                # Create new paper entry with comma-separated values
-                                new_paper = {
-                                    'title': new_title,
-                                    'doi': new_doi,
-                                    'authors': new_authors,
-                                    'year': new_year,
-                                    'journal': new_journal,
-                                    'abstract': new_abstract,
-                                    'study_type': ', '.join(new_study_types) if new_study_types else '',
-                                    'poverty_context': ', '.join(new_poverty_contexts) if new_poverty_contexts else '',
-                                    'mechanism': ', '.join(new_mechanisms) if new_mechanisms else '',
-                                    'behavior': ', '.join(new_behaviors) if new_behaviors else ''
-                                }
-                                
-                                # Add to dataframe
-                                new_row = pd.DataFrame([new_paper])
-                                database_to_update = pd.concat([database_to_update, new_row], ignore_index=True)
-                                
-                                # Save changes back to Google Sheets
-                                google_sheets_connection.replace(
-                                    spreadsheet_id=spreadsheet_ids['papers'],
-                                    df=database_to_update
+                                # Insert new paper into BigQuery
+                                client.execute_query(
+                                    f"""
+                                    INSERT INTO `literature-452020.psychology_of_poverty_literature.papers`
+                                    (title, doi, authors, year, journal, abstract, study_type, poverty_context, mechanism, behavior)
+                                    VALUES (
+                                        '{new_title}',
+                                        '{new_doi}',
+                                        '{new_authors}',
+                                        {new_year},
+                                        '{new_journal}',
+                                        '{new_abstract}',
+                                        '{", ".join(new_study_types) if new_study_types else ""}',
+                                        '{", ".join(new_poverty_contexts) if new_poverty_contexts else ""}',
+                                        '{", ".join(new_mechanisms) if new_mechanisms else ""}',
+                                        '{", ".join(new_behaviors) if new_behaviors else ""}'
+                                    )
+                                    """
                                 )
                                 st.success("New paper added successfully!")
                                 
@@ -543,42 +495,37 @@ with tab3:
                 new_mechanisms = st.multiselect("Mechanisms", options=label_data['mechanisms'])
                 new_behaviors = st.multiselect("Behaviors", options=label_data['Behaviors'])
                 
-                add_button = st.form_submit_button(label="Add New Paper Manually")
+                add_button = st.form_submit_button(label="Add New Paper")
                 
                 if add_button and new_title:  # Require at least a title
                     with st.spinner("Adding new paper to database..."):
                         try:
-                            # Create new paper entry with comma-separated values
-                            new_paper = {
-                                'title': new_title,
-                                'doi': new_doi,
-                                'authors': new_authors,
-                                'year': new_year,
-                                'journal': new_journal,
-                                'abstract': new_abstract,
-                                'study_type': ', '.join(new_study_types) if new_study_types else '',
-                                'poverty_context': ', '.join(new_poverty_contexts) if new_poverty_contexts else '',
-                                'mechanism': ', '.join(new_mechanisms) if new_mechanisms else '',
-                                'behavior': ', '.join(new_behaviors) if new_behaviors else ''
-                            }
-                            
-                            # Add to dataframe
-                            new_row = pd.DataFrame([new_paper])
-                            database_to_update = pd.concat([database_to_update, new_row], ignore_index=True)
-                            
-                            # Save changes back to Google Sheets
-                            google_sheets_connection.replace(
-                                spreadsheet_id=spreadsheet_ids['papers'],
-                                df=database_to_update
+                            # Insert new paper into BigQuery
+                            client = get_bigquery_client()
+                            client.execute_query(
+                                f"""
+                                INSERT INTO `literature-452020.psychology_of_poverty_literature.papers`
+                                (title, doi, authors, year, journal, abstract, study_type, poverty_context, mechanism, behavior)
+                                VALUES (
+                                    '{new_title}',
+                                    '{new_doi}',
+                                    '{new_authors}',
+                                    {new_year},
+                                    '{new_journal}',
+                                    '{new_abstract}',
+                                    '{", ".join(new_study_types) if new_study_types else ""}',
+                                    '{", ".join(new_poverty_contexts) if new_poverty_contexts else ""}',
+                                    '{", ".join(new_mechanisms) if new_mechanisms else ""}',
+                                    '{", ".join(new_behaviors) if new_behaviors else ""}'
+                                )
+                                """
                             )
                             st.success("New paper added successfully!")
                             
                         except Exception as e:
                             st.error(f"Error adding paper: {str(e)}")
                     
-                    st.rerun()
-
-            
+                    st.rerun()            
 with tab4:
     st.header("Operation Logs")
 
