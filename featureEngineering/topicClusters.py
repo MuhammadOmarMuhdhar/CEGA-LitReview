@@ -4,7 +4,7 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
 def run(papers,                
-        n_clusters=7, 
+        n_clusters=10, 
         random_state=42):
     """
     Perform K-means clustering on a list of papers based on their UMAP embeddings.
