@@ -445,7 +445,7 @@ def main():
         st.markdown("#### Connecting Poverty Context, Psychological Mechanisms and Behavior")
         st.markdown("""
         Use the filters below to customize the Sankey diagram. 
-        Performance decreasse when visualizing a large number of papers.
+        Performance decreases when visualizing a large number of papers.
         """)
             
 
