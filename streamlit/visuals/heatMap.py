@@ -10,7 +10,7 @@ class heatmap:
     Uses intelligent sampling to prevent crashes while maintaining visual quality.
     """
     
-    def __init__(self, plot_df, topic_clusters=None, resolution=50, sigma=2.0):
+    def __init__(self, plot_df, topic_clusters=None, resolution=90, sigma=1.5):
         """
         Initialize the visualization class.
         
