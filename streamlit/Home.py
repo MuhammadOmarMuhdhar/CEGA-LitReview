@@ -239,16 +239,19 @@ def load_topics():
 
 def load_abstract_data(title):
     client = get_bigquery_client()
-    # Escape single quotes by doubling them
-    escaped_title = title.replace("'", "''")
+    # Handle all problematic characters
+    safe_title = title.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+    
     return client.execute_query(
         f"""
         SELECT abstract, title, authors, study_type, poverty_context, mechanism, behavior
         FROM `literature-452020.psychology_of_poverty_literature.papers`
-        WHERE title = '{escaped_title}'
+        WHERE title = '{safe_title}'
         LIMIT 1
         """
     )
+
+
 
 @st.cache_data(show_spinner="Loading Heat Map Data...")
 def load_umap():
