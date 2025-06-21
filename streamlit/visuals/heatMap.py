@@ -10,7 +10,7 @@ class heatmap:
     Uses intelligent sampling to prevent crashes while maintaining visual quality.
     """
     
-    def __init__(self, plot_df, topic_clusters=None, resolution=100, sigma=2.0):
+    def __init__(self, plot_df, topic_clusters=None, resolution=50, sigma=2.0):
         """
         Initialize the visualization class.
         
@@ -349,17 +349,40 @@ class heatmap:
     def _create_animation_steps(self, fig, progress_bar):
         """Create animation steps for the slider"""
         
-        # Create animation steps
-        steps = [
-            dict(
+        # Create animation steps with paper counts
+        steps = []
+        for i in range(len(self.valid_dates)):
+            # Calculate paper count for this year
+            year_data = self.plot_df[self.plot_df['date'] == self.valid_dates[i]]
+            paper_count = len(year_data)
+            
+            step = dict(
                 method="update",
                 args=[
                     {"visible": [False] * len(fig.data)},
-                    {"title": f"Cumulative Papers Up to {self.valid_dates[i]}"}
+                    {
+                        "title": f"Research Papers in {self.valid_dates[i]}",
+                        "annotations": [
+                            dict(
+                                text="Note: Each White Dot Represents a Paper",
+                                xref="paper", yref="paper",
+                                x=0.5, y=0, 
+                                showarrow=False,
+                                font=dict(size=10, color="white")
+                            ),
+                            dict(
+                                text=f"Papers visualized: {paper_count:,}",
+                                xref="paper", yref="paper",
+                                x=0.5, y=-0.08, 
+                                showarrow=False,
+                                font=dict(size=12, color="white", family="Arial Bold")
+                            )
+                        ]
+                    }
                 ],
                 label=str(self.valid_dates[i])
-            ) for i in range(len(self.valid_dates))
-        ]
+            )
+            steps.append(step)
         progress_bar.progress(85)
 
         # Update visibility for each step
@@ -386,7 +409,7 @@ class heatmap:
                 pad={"t": 50},
                 steps=steps
             )],
-            title="Use the Slider to Explore How Research Topics Evolve Over Time",
+            title="Research Papers by Year - Use Slider to Explore Different Years",
             xaxis=dict(
                 title="",
                 showticklabels=False,
