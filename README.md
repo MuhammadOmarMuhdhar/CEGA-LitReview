@@ -1,6 +1,7 @@
 ![CEGA Logo](streamlit/logo.png)
 
-### [Psychology and Economics of Poverty Literature Review Dashboard](https://psychology-literature-dashboard.streamlit.app)
+🔗 [https://psychology-literature-dashboard.streamlit.app](https://psychology-literature-dashboard.streamlit.app)  
+### Psychology and Economics of Poverty Literature Review Dashboard
 
 Research on the psychological consequences of poverty has emerged from diverse academic disciplines, each offering distinct perspectives and methodologies. However, this research has often developed in isolation, leading to fragmented insights and limited interdisciplinary dialogue. This lack of integration makes it challenging to develop a comprehensive understanding of poverty and its multifaceted effects.
 

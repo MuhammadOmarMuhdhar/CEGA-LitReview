@@ -17,7 +17,7 @@ class heatmap:
         Args:
             plot_df (pd.DataFrame): DataFrame with document data including 'UMAP1', 'UMAP2', 'date', 'title'
             topic_clusters (pd.DataFrame, optional): DataFrame with topic cluster information
-            resolution (int): Grid resolution for density calculation (default 100)
+            resolution (int): Grid resolution for density calculation (default 50)
             sigma (float): Gaussian blur amount for density smoothing (default 2.0)
         """
         self.plot_df = plot_df.copy()
@@ -43,9 +43,8 @@ class heatmap:
         upper_bound = np.percentile(series, upper_percentile)
         return lower_bound, upper_bound
     
-    def _calculate_global_bounds(self, progress_bar, status_text):
+    def _calculate_global_bounds(self, progress_bar):
         """Calculate global bounds for the visualization based on percentiles"""
-        status_text.text("Calculating bounds...")
         
         # Get percentile-based bounds for the core data
         x_min_core, x_max_core = self._get_percentile_bounds(self.plot_df['UMAP1'])
@@ -64,9 +63,28 @@ class heatmap:
         self.y_min_global = y_min_core - y_range * padding_factor
         self.y_max_global = y_max_core + y_range * padding_factor
     
+    def _calculate_dynamic_resolution(self, data_size):
+        """
+        Calculate optimal resolution based on data size.
+        Less data = higher resolution for better detail
+        More data = lower resolution for performance
+        """
+        if data_size < 100:
+            return min(100, self.resolution * 2)  # High detail for small datasets
+        elif data_size < 500:
+            return min(80, int(self.resolution * 1.5))
+        elif data_size < 2000:
+            return self.resolution  # Use default
+        elif data_size < 10000:
+            return max(30, int(self.resolution * 0.8))
+        elif data_size < 50000:
+            return max(25, int(self.resolution * 0.6))
+        else:
+            return max(20, int(self.resolution * 0.4))  # Low resolution for huge datasets
+
     def _smart_sampling_density_model(self, df, x_col='UMAP1', y_col='UMAP2'):
         """
-        Memory-safe density estimation with intelligent sampling based on dataset size.
+        Memory-safe density estimation with intelligent sampling AND dynamic resolution.
         """
         if len(df) < 10:
             return None
@@ -74,6 +92,9 @@ class heatmap:
         try:
             # Define sampling thresholds
             data_size = len(df)
+            
+            # Calculate dynamic resolution based on data size
+            dynamic_resolution = self._calculate_dynamic_resolution(data_size)
             
             if data_size < 1000:
                 sample_pct = 1.0  # Use all data
@@ -103,10 +124,10 @@ class heatmap:
             x = sampled_df[x_col].values
             y = sampled_df[y_col].values
             
-            # Create 2D histogram (fast even for large samples)
+            # Create 2D histogram with DYNAMIC resolution
             hist, x_edges, y_edges = np.histogram2d(
                 x, y, 
-                bins=self.resolution,
+                bins=dynamic_resolution,
                 range=[[self.x_min_global, self.x_max_global], 
                        [self.y_min_global, self.y_max_global]]
             )
@@ -182,10 +203,9 @@ class heatmap:
             # Fallback to simple random sampling
             return df.sample(n=min(n_sample, len(df)), random_state=42)
     
-    def _prepare_data(self, progress_bar, status_text):
+    def _prepare_data(self, progress_bar):
         """Prepare and sort data by date"""
-        status_text.text("Preparing data...")
-        
+
         # Sort data by date
         self.plot_df = self.plot_df.sort_values('date')
         progress_bar.progress(25)
@@ -194,9 +214,8 @@ class heatmap:
         self.unique_dates = sorted(self.plot_df['date'].unique())
         progress_bar.progress(30)
     
-    def _generate_traces(self, progress_bar, status_text):
+    def _generate_traces(self, progress_bar):
         """Generate traces for each date with progress tracking"""
-        status_text.text("Generating traces...")
         
         self.valid_dates = []
         fig = go.Figure()
@@ -212,7 +231,7 @@ class heatmap:
             progress_bar.progress(current_progress)
             
             # Filter data for dates up to and including the current date
-            cumulative_data = self.plot_df[self.plot_df['date'] <= date]
+            cumulative_data = self.plot_df[self.plot_df['date'] == date]
             
             if len(cumulative_data) < 10:
                 continue
@@ -272,8 +291,7 @@ class heatmap:
                     visible=False
                 )
                 
-                # Sample data points for display (limit to reasonable number for performance)
-                max_display_points = 2000
+                max_display_points = 10000
                 if len(core_data) > max_display_points:
                     display_data = core_data.sample(n=max_display_points, random_state=42)
                 else:
@@ -310,7 +328,7 @@ class heatmap:
                         text=visible_clusters['label'],
                         textposition='middle center',
                         marker=dict(
-                            size=4,
+                            size=10,
                             color='rgba(255, 255, 255, 0.3)', 
                             opacity=1
                         ),
@@ -328,9 +346,8 @@ class heatmap:
         
         return fig
     
-    def _create_animation_steps(self, fig, progress_bar, status_text):
+    def _create_animation_steps(self, fig, progress_bar):
         """Create animation steps for the slider"""
-        status_text.text("Creating animation controls...")
         
         # Create animation steps
         steps = [
@@ -358,9 +375,8 @@ class heatmap:
         progress_bar.progress(90)
         return steps
     
-    def _configure_layout(self, fig, steps, progress_bar, status_text):
+    def _configure_layout(self, fig, steps, progress_bar):
         """Configure the final layout of the figure"""
-        status_text.text("Configuring layout...")
         
         # Configure layout
         fig.update_layout(
@@ -420,31 +436,28 @@ class heatmap:
         Returns:
             plotly.graph_objs._figure.Figure: The complete animated visualization
         """
-        # Create progress bar and status text
+        # Create progress bar
         progress_bar = st.progress(0)
-        status_text = st.empty()
         
         try:
             # Validation
-            status_text.text("Validating data...")
             progress_bar.progress(5)
             
             # Step 1: Calculate global bounds
-            self._calculate_global_bounds(progress_bar, status_text)
+            self._calculate_global_bounds(progress_bar)
             
             # Step 2: Prepare data
-            self._prepare_data(progress_bar, status_text)
+            self._prepare_data(progress_bar)
             
             # Step 3: Generate traces
-            fig = self._generate_traces(progress_bar, status_text)
+            fig = self._generate_traces(progress_bar)
             
             # Step 4: Create animation steps
-            steps = self._create_animation_steps(fig, progress_bar, status_text)
+            steps = self._create_animation_steps(fig, progress_bar)
             
             # Step 5: Configure layout
-            fig = self._configure_layout(fig, steps, progress_bar, status_text)
+            fig = self._configure_layout(fig, steps, progress_bar)
             
-            status_text.text("Visualization complete!")
             return fig
             
         finally:
@@ -452,4 +465,3 @@ class heatmap:
             import time
             time.sleep(0.5)
             progress_bar.empty()
-            status_text.empty()
