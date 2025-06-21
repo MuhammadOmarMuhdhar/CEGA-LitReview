@@ -24,14 +24,14 @@ def preprocess_papers_data(papers_df):
     """One-time expensive preprocessing to avoid repeated ast.literal_eval calls"""
     df = papers_df.copy()
     
-    # Pre-parse institutions (this was the expensive killer operation!)
+    # Pre-parse institutions (convert lists to strings for caching)
     df['institutions_list'] = df['institution'].apply(
-        lambda x: list(dict.fromkeys([i for i in ast.literal_eval(x) if i is not None]))
+        lambda x: str(list(dict.fromkeys([i for i in ast.literal_eval(x) if i is not None])))
     )
     
-    # Pre-parse countries
+    # Pre-parse countries (convert lists to strings for caching)
     df['countries_list'] = df['country_of_study'].apply(
-        lambda x: [i.strip() for i in str(x).split(',') if i.strip() and i.strip().lower() != 'nan']
+        lambda x: str([i.strip() for i in str(x).split(',') if i.strip() and i.strip().lower() != 'nan'])
     )
     
     return df
@@ -40,18 +40,20 @@ def preprocess_papers_data(papers_df):
 @st.cache_data(show_spinner="Loading Filters...")
 def process_countries_and_institutions(preprocessed_df):
     """Process and extract unique countries and institutions from preprocessed dataset"""
-    # Extract unique countries from pre-parsed lists
+    # Extract unique countries from string representations
     countries = []
-    for country_list in preprocessed_df['countries_list']:
+    for country_str in preprocessed_df['countries_list']:
+        country_list = ast.literal_eval(country_str)  # Convert string back to list
         countries.extend(country_list)
-    countries = list(set(countries))  # Remove duplicates
+    countries = list(set(countries))
     countries = [str(country) for country in countries if country and str(country).lower() != 'nan']
     
-    # Extract unique institutions from pre-parsed lists
+    # Extract unique institutions from string representations
     institutions = []
-    for inst_list in preprocessed_df['institutions_list']:
+    for inst_str in preprocessed_df['institutions_list']:
+        inst_list = ast.literal_eval(inst_str)  # Convert string back to list
         institutions.extend(inst_list)
-    institutions = list(set(institutions))  # Remove duplicates
+    institutions = list(set(institutions))
     institutions = [str(inst) for inst in institutions if inst]
     
     return sorted(countries), sorted(institutions)
@@ -62,11 +64,11 @@ def lightning_fast_filter(preprocessed_df, selected_country, selected_institutio
     result = preprocessed_df.copy()
     
     if selected_country != 'All':
-        mask = result['countries_list'].apply(lambda x: selected_country in x)
+        mask = result['countries_list'].apply(lambda x: selected_country in ast.literal_eval(x))
         result = result[mask]
     
     if selected_institution != 'All':
-        mask = result['institutions_list'].apply(lambda x: selected_institution in x)
+        mask = result['institutions_list'].apply(lambda x: selected_institution in ast.literal_eval(x))
         result = result[mask]
     
     return result
@@ -93,7 +95,8 @@ def calculate_statistics(filtered_df, papers_df, selected_country, selected_inst
         countries_count = 1
     else:
         all_countries = []
-        for country_list in filtered_df['countries_list']:
+        for country_str in filtered_df['countries_list']:
+            country_list = ast.literal_eval(country_str)  # Convert string back to list
             all_countries.extend(country_list)
         countries_count = len(set(all_countries))
     
@@ -102,7 +105,8 @@ def calculate_statistics(filtered_df, papers_df, selected_country, selected_inst
         institutions_count = 1
     else:
         all_institutions = []
-        for inst_list in filtered_df['institutions_list']:
+        for inst_str in filtered_df['institutions_list']:
+            inst_list = ast.literal_eval(inst_str)  # Convert string back to list
             all_institutions.extend(inst_list)
         institutions_count = len(set(all_institutions))
     
@@ -404,7 +408,8 @@ def main():
                     # Get institutions for the selected country filter
                     if selected_country != 'All':
                         filtered_institutions = []
-                        for inst_list in temp_filtered_df['institutions_list']:
+                        for inst_str in temp_filtered_df['institutions_list']:
+                            inst_list = ast.literal_eval(inst_str)  # Convert string back to list
                             filtered_institutions.extend(inst_list)
                         institutions_list = sorted(list(set(filtered_institutions)))
                     else:
@@ -450,7 +455,8 @@ def main():
                 with st.expander(" ", expanded=True):
                     # Use preprocessed institutions list for counting
                     all_institutions_in_filtered = []
-                    for inst_list in working_df['institutions_list']:
+                    for inst_str in working_df['institutions_list']:
+                        inst_list = ast.literal_eval(inst_str)  # Convert string back to list
                         all_institutions_in_filtered.extend(inst_list)
                     
                     # Count institutions
