@@ -634,13 +634,13 @@ def main():
 
         umap_data = st.session_state.umap_data
         # Filter UMAP data to only include papers in the working_df
-        plot_df = umap_data[umap_data['doi'].isin(working_df['doi'].tolist())]
+        plot_df = umap_data[umap_data['doi'].isin(working_df_exploded['doi'].tolist())]
         topics_df = load_topics()
 
         with col2:
             with st.spinner("Loading Research Paper Details"):  
                 working_df_copy = st.session_state.labels_data
-                working_df_copy = working_df_copy[working_df_copy['doi'].isin(working_df['doi'].tolist())]
+                working_df_copy = working_df_copy[working_df_copy['doi'].isin(working_df_exploded['doi'].tolist())]
 
                 with st.expander("Number of Papers Visualized", expanded=True):
                     st.markdown(f"**{len(working_df_copy):,}**")
