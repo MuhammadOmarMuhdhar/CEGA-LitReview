@@ -18,48 +18,58 @@ def load_filters_json():
     with open('data/trainingData/labels.json', 'r') as f:
         return json.load(f)
 
-# Cache expensive data processing operations
-@st.cache_data(show_spinner="Loading Filters...")
-def process_countries_and_institutions(papers_df):
-    """Process and extract unique countries and institutions from the dataset"""
-    # Extract unique countries from comma-separated lists
-    country_filter = papers_df.copy()
-    country_filter['country_of_study'] = country_filter['country_of_study'].apply(
-        lambda x: [i.strip() for i in str(x).split(',') if i.strip() and i.strip().lower() != 'nan']
-    )
-    countries = country_filter['country_of_study'].explode().unique()
-    countries = [str(country) for country in countries if country is not None and str(country).lower() != 'nan']
+# NEW: Pre-process expensive operations once
+@st.cache_data(show_spinner="Pre-processing data for optimal performance...")
+def preprocess_papers_data(papers_df):
+    """One-time expensive preprocessing to avoid repeated ast.literal_eval calls"""
+    df = papers_df.copy()
     
-    # Extract unique institutions
-    institution_filter = papers_df.copy()
-    institution_filter['institution'] = institution_filter['institution'].apply(
+    # Pre-parse institutions (this was the expensive killer operation!)
+    df['institutions_list'] = df['institution'].apply(
         lambda x: list(dict.fromkeys([i for i in ast.literal_eval(x) if i is not None]))
     )
-    institutions = institution_filter['institution'].explode().unique()
-    institutions = [str(inst) for inst in institutions if inst is not None]
+    
+    # Pre-parse countries
+    df['countries_list'] = df['country_of_study'].apply(
+        lambda x: [i.strip() for i in str(x).split(',') if i.strip() and i.strip().lower() != 'nan']
+    )
+    
+    return df
+
+# Cache expensive data processing operations - NOW MUCH FASTER
+@st.cache_data(show_spinner="Loading Filters...")
+def process_countries_and_institutions(preprocessed_df):
+    """Process and extract unique countries and institutions from preprocessed dataset"""
+    # Extract unique countries from pre-parsed lists
+    countries = []
+    for country_list in preprocessed_df['countries_list']:
+        countries.extend(country_list)
+    countries = list(set(countries))  # Remove duplicates
+    countries = [str(country) for country in countries if country and str(country).lower() != 'nan']
+    
+    # Extract unique institutions from pre-parsed lists
+    institutions = []
+    for inst_list in preprocessed_df['institutions_list']:
+        institutions.extend(inst_list)
+    institutions = list(set(institutions))  # Remove duplicates
+    institutions = [str(inst) for inst in institutions if inst]
     
     return sorted(countries), sorted(institutions)
 
 @st.cache_data(show_spinner="Loading Metadata Filters...")
-def filter_papers_by_country_and_institution(papers_df, selected_country, selected_institution):
-    """Filter papers based on selected country and institution"""
-    working_df = papers_df.copy()
+def lightning_fast_filter(preprocessed_df, selected_country, selected_institution):
+    """Super fast filtering using preprocessed data - no more ast.literal_eval!"""
+    result = preprocessed_df.copy()
     
-    # Apply country filter if not "All"
     if selected_country != 'All':
-        working_df = working_df[
-            working_df['country_of_study'].apply(
-                lambda x: selected_country in [i.strip() for i in str(x).split(',') if i.strip()]
-            )
-        ]
+        mask = result['countries_list'].apply(lambda x: selected_country in x)
+        result = result[mask]
     
-    # Apply institution filter if not "All"
     if selected_institution != 'All':
-        working_df = working_df[
-            working_df['institution'].apply(lambda x: selected_institution in ast.literal_eval(x))
-        ]
+        mask = result['institutions_list'].apply(lambda x: selected_institution in x)
+        result = result[mask]
     
-    return working_df
+    return result
 
 @st.cache_data(show_spinner="Loading Metadata...")
 def calculate_statistics(filtered_df, papers_df, selected_country, selected_institution):
@@ -78,29 +88,23 @@ def calculate_statistics(filtered_df, papers_df, selected_country, selected_inst
     else:
         date_range = "No data available"
     
-    # Countries count
+    # Countries count - use preprocessed data
     if selected_country != 'All':
         countries_count = 1
     else:
-        filtered_country_data = filtered_df.copy()
-        filtered_country_data['country_of_study'] = filtered_country_data['country_of_study'].apply(
-            lambda x: [i.strip() for i in str(x).split(',') if i.strip() and i.strip().lower() != 'nan']
-        )
-        filtered_countries = filtered_country_data['country_of_study'].explode().unique()
-        filtered_countries = [str(c) for c in filtered_countries if c is not None and str(c).lower() != 'nan']
-        countries_count = len(filtered_countries)
+        all_countries = []
+        for country_list in filtered_df['countries_list']:
+            all_countries.extend(country_list)
+        countries_count = len(set(all_countries))
     
-    # Institutions count
+    # Institutions count - use preprocessed data
     if selected_institution != 'All':
         institutions_count = 1
     else:
-        filtered_inst_data = filtered_df.copy()
-        filtered_inst_data['institution'] = filtered_inst_data['institution'].apply(
-            lambda x: list(dict.fromkeys([i for i in ast.literal_eval(x) if i is not None]))
-        )
-        filtered_institutions = filtered_inst_data['institution'].explode().unique()
-        filtered_institutions = [str(inst) for inst in filtered_institutions if inst is not None]
-        institutions_count = len(filtered_institutions)
+        all_institutions = []
+        for inst_list in filtered_df['institutions_list']:
+            all_institutions.extend(inst_list)
+        institutions_count = len(set(all_institutions))
     
     return {
         'total_papers': total_papers,
@@ -180,16 +184,6 @@ api_key, credentials, email, password = st.session_state.configuration
 
 st.set_page_config(page_title="Workspace", layout="wide", initial_sidebar_state='collapsed')
 
-# st.markdown( """
-
-#         <style>   
-#         #MainMenu {visibility: hidden;}       
-#         <style>
-
-#         """, unsafe_allow_html=True
-# )
-
-
 st.sidebar.markdown("""
          <style>
             .sidebar-icons {
@@ -209,60 +203,80 @@ st.sidebar.markdown("""
                         unsafe_allow_html=True,
 )
 
-@st.cache_resource
 def get_bigquery_client():
-    return Client(credentials, 'literature-452020')
+    try:
+        return Client(credentials, 'literature-452020')
+    except Exception as e:
+        st.error(f"Failed to connect to database: {str(e)}")
+        st.stop()
 
 @st.cache_data(show_spinner="Connecting to Database...")
 def load_country_institution_data():
-    client = get_bigquery_client()
-    return client.execute_query(
-        "SELECT doi, country, date, institution, country_of_study "
-        "FROM `literature-452020.psychology_of_poverty_literature.papers`"
-    )
+    try:
+        client = get_bigquery_client()
+        return client.execute_query(
+            "SELECT doi, country, date, institution, country_of_study "
+            "FROM `literature-452020.psychology_of_poverty_literature.papers`"
+        )
+    except Exception as e:
+        st.error(f"Failed to load data: {str(e)}")
+        return pd.DataFrame()
 
 @ st.cache_data(show_spinner="Loading Sankey Diagram Data...")
 def load_label_data():
-    client = get_bigquery_client()
-    return client.execute_query(
-        "SELECT doi, authors, study_type, poverty_context, "
-        "mechanism, behavior "
-        "FROM `literature-452020.psychology_of_poverty_literature.papers`"
-    )
+    try:
+        client = get_bigquery_client()
+        return client.execute_query(
+            "SELECT doi, authors, study_type, poverty_context, "
+            "mechanism, behavior "
+            "FROM `literature-452020.psychology_of_poverty_literature.papers`"
+        )
+    except Exception as e:
+        st.error(f"Failed to load label data: {str(e)}")
+        return pd.DataFrame()
 
 def load_topics():
-    client = get_bigquery_client()
-    return client.execute_query(
-        "SELECT * "
-        "FROM `literature-452020.psychology_of_poverty_literature.topics`"
-    )
+    try:
+        client = get_bigquery_client()
+        return client.execute_query(
+            "SELECT * "
+            "FROM `literature-452020.psychology_of_poverty_literature.topics`"
+        )
+    except Exception as e:
+        st.error(f"Failed to load topics: {str(e)}")
+        return pd.DataFrame()
 
 def load_abstract_data(title):
-    client = get_bigquery_client()
-    # Handle all problematic characters
-    safe_title = title.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
-    
-    return client.execute_query(
-        f"""
-        SELECT abstract, title, authors, study_type, poverty_context, mechanism, behavior
-        FROM `literature-452020.psychology_of_poverty_literature.papers`
-        WHERE title = '{safe_title}'
-        LIMIT 1
-        """
-    )
-
-
+    try:
+        client = get_bigquery_client()
+        # Handle all problematic characters
+        safe_title = title.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+        
+        return client.execute_query(
+            f"""
+            SELECT abstract, title, authors, study_type, poverty_context, mechanism, behavior
+            FROM `literature-452020.psychology_of_poverty_literature.papers`
+            WHERE title = '{safe_title}'
+            LIMIT 1
+            """
+        )
+    except Exception as e:
+        st.error(f"Failed to load abstract data: {str(e)}")
+        return pd.DataFrame()
 
 @st.cache_data(show_spinner="Loading Heat Map Data...")
 def load_umap():
-    client = get_bigquery_client()
-    return client.execute_query(
-        f"""
-        SELECT  title, doi, UMAP1, UMAP2, date
-        FROM `literature-452020.psychology_of_poverty_literature.papers`
-        """
-    )
-
+    try:
+        client = get_bigquery_client()
+        return client.execute_query(
+            f"""
+            SELECT  title, doi, UMAP1, UMAP2, date
+            FROM `literature-452020.psychology_of_poverty_literature.papers`
+            """
+        )
+    except Exception as e:
+        st.error(f"Failed to load UMAP data: {str(e)}")
+        return pd.DataFrame()
 
 def main():    
 
@@ -322,7 +336,7 @@ def main():
                     - Shufan Pan  
                     - Kristina Hallez  
 
-                    Special thanks to **Kellie Hogue** at UC Berkeley’s D-Lab and **Van Tran**.
+                    Special thanks to **Kellie Hogue** at UC Berkeley's D-Lab and **Van Tran**.
 
                     ---
                     If you are a researcher or project manager interested in adapting this tool for your field, visit the **Documentation** tab to learn about the technology behind it and how to implement it in your research domain.
@@ -336,11 +350,16 @@ def main():
     # Understanding the Field Tab
     with tab1:
 
-        # Then use it like:
+        # Load and preprocess data
         if 'papers_df' not in st.session_state:
             st.session_state.papers_df = load_country_institution_data()
 
+        # NEW: Preprocess the data once for lightning-fast filtering
+        if 'preprocessed_papers' not in st.session_state:
+            st.session_state.preprocessed_papers = preprocess_papers_data(st.session_state.papers_df)
+
         papers_df = st.session_state.papers_df
+        preprocessed_papers = st.session_state.preprocessed_papers
 
         # Introduction
         st.markdown("""
@@ -355,8 +374,8 @@ def main():
         if 'selected_institution' not in st.session_state:
             st.session_state.selected_institution = 'All'
 
-        # Get processed countries and institutions (cached)
-        countries, all_institutions = process_countries_and_institutions(papers_df)
+        # Get processed countries and institutions (cached) - now using preprocessed data
+        countries, all_institutions = process_countries_and_institutions(preprocessed_papers)
 
         # Create layout with appropriate column widths
         col1, col2 = st.columns([1, 1.4])
@@ -378,19 +397,16 @@ def main():
                     st.session_state.selected_country = selected_country
                 
                 # Get filtered data based on country selection (for institution dropdown)
-                temp_filtered_df = filter_papers_by_country_and_institution(papers_df, selected_country, 'All')
+                temp_filtered_df = lightning_fast_filter(preprocessed_papers, selected_country, 'All')
                 
                 # Institution filter dropdown (dependent on country selection)
                 with col4:
                     # Get institutions for the selected country filter
                     if selected_country != 'All':
-                        institution_filter = temp_filtered_df.copy()
-                        institution_filter['institution'] = institution_filter['institution'].apply(
-                            lambda x: list(dict.fromkeys([i for i in ast.literal_eval(x) if i is not None]))
-                        )
-                        filtered_institutions = institution_filter['institution'].explode().unique()
-                        institutions_list = [str(inst) for inst in filtered_institutions if inst is not None]
-                        institutions_list = sorted(institutions_list)
+                        filtered_institutions = []
+                        for inst_list in temp_filtered_df['institutions_list']:
+                            filtered_institutions.extend(inst_list)
+                        institutions_list = sorted(list(set(filtered_institutions)))
                     else:
                         institutions_list = all_institutions
                     
@@ -403,8 +419,8 @@ def main():
                     # Store the selected institution in session state
                     st.session_state.selected_institution = selected_institution
             
-            # Get final filtered data (cached)
-            working_df = filter_papers_by_country_and_institution(papers_df, selected_country, selected_institution)
+            # Get final filtered data using lightning-fast filtering
+            working_df = lightning_fast_filter(preprocessed_papers, selected_country, selected_institution)
             
             # Calculate statistics (cached)
             stats = calculate_statistics(working_df, papers_df, selected_country, selected_institution)
@@ -428,24 +444,31 @@ def main():
                     st.markdown(f"**{stats['institutions_count']}**")
 
                     
-            with col2:
-                # Preprocess and visualize top institutions
-                with st.spinner("Generating Bar Chart..."):
-                    # st.markdown(" ")
-                    with st.expander(" ", expanded=True):
-
-                        exploded_institutions = working_df.copy()
-                        exploded_institutions['institution'] = exploded_institutions['institution'].apply(lambda x: list(dict.fromkeys([i for i in ast.literal_eval(x) if i is not None])))
-                        exploded_institutions = exploded_institutions.explode('institution')
+        with col2:
+            # Preprocess and visualize top institutions - now much faster!
+            with st.spinner("Generating Bar Chart..."):
+                with st.expander(" ", expanded=True):
+                    # Use preprocessed institutions list for counting
+                    all_institutions_in_filtered = []
+                    for inst_list in working_df['institutions_list']:
+                        all_institutions_in_filtered.extend(inst_list)
                     
-                        institution_counts = exploded_institutions.groupby('institution').size().reset_index(name='count')
-                        top_institutions = institution_counts.sort_values('count', ascending=False).head(10)
+                    # Count institutions
+                    from collections import Counter
+                    institution_counts = Counter(all_institutions_in_filtered)
+                    
+                    # Convert to DataFrame for plotting
+                    top_institutions = pd.DataFrame([
+                        {'institution': inst, 'count': count} 
+                        for inst, count in institution_counts.most_common(10)
+                    ])
 
-                        st.markdown("###### Research Institutions -  Number of Publications")
+                    st.markdown("###### Research Institutions -  Number of Publications")
+                    if not top_institutions.empty:
                         institution_figure = bar.create(top_institutions, x_column='institution', y_column='count', title=None, coord_flip=True, height= 345)
                         st.plotly_chart(institution_figure, use_container_width=True)
-
-                    
+                    else:
+                        st.write("No data available for selected filters.")
 
         st.markdown("#### Connecting Poverty Context, Psychological Mechanisms and Behavior")
         st.markdown("""
@@ -453,7 +476,6 @@ def main():
         Performance decreases when visualizing a large number of papers.
         """)
             
-
         col1, col2 = st.columns([1  , 6])
 
         if "labels_data" not in st.session_state:
@@ -461,7 +483,6 @@ def main():
         with col1:
 
             filters = load_filters_json()
-
 
             def build_tree(data, path=""):
                 tree = []
@@ -482,7 +503,6 @@ def main():
                             "children": children
                         })
                 return tree
-            
             
             st.markdown("###### Poverty Contexts")
             selected_contexts = st.multiselect("Select", list(filters['poverty_contexts'].keys()))
@@ -522,11 +542,10 @@ def main():
                 else: 
                     all_selected_behaviors.append(value_list[1])
 
-
             labels_df = st.session_state.labels_data
-            working_df = labels_df[labels_df['doi'].isin(working_df['doi'].tolist())]
+            sankey_working_df = labels_df[labels_df['doi'].isin(working_df['doi'].tolist())]           
             
-            working_df_exploded = working_df.copy()
+            working_df_exploded = sankey_working_df.copy()
             working_df_exploded['poverty_context'] = working_df_exploded['poverty_context'].str.split(',')
             working_df_exploded = working_df_exploded.explode('poverty_context')
             # remove leading and trailing spaces
@@ -553,7 +572,7 @@ def main():
             if all_selected_behaviors:
                 working_df_exploded = working_df_exploded[working_df_exploded['behavior'].isin(all_selected_behaviors)]
 
-            working_df = working_df[working_df['doi'].isin(working_df_exploded['doi'].tolist())]       
+            sankey_working_df = sankey_working_df[sankey_working_df['doi'].isin(working_df_exploded['doi'].tolist())]       
 
         # In col2, use working_df_viz for the Sankey
         with col2:
@@ -586,8 +605,6 @@ def main():
                     selected_nodes.append('behavior')
                 else: 
                     selected_nodes = ['poverty_context', 'study_type', 'mechanism', 'behavior']
-                
-
 
                 # Prepare active_filters dictionary for the sankey function
                 active_filters = {
@@ -598,20 +615,18 @@ def main():
                 }
                 
                 # Create and display the Sankey diagram with adaptive detail
-                        
                 sankey_diagram = sankey.Sankey(filters_json = filters)
 
-                sankey_fig = sankey_diagram.draw(working_df_exploded, 
-                                                active_filters=active_filters,
-                                                columns_to_show = selected_nodes)
-
-                st.plotly_chart(sankey_fig, use_container_width=True)
-
-
+                if not working_df_exploded.empty:
+                    sankey_fig = sankey_diagram.draw(working_df_exploded, 
+                                                    active_filters=active_filters,
+                                                    columns_to_show = selected_nodes)
+                    st.plotly_chart(sankey_fig, use_container_width=True)
+                else:
+                    st.write("No data available for selected filters.")
 
         st.markdown("#### Research Landscape")
 
-        
         col1, col2 = st.columns([2, 1])
 
         if 'umap_data' not in st.session_state:
@@ -622,104 +637,90 @@ def main():
         plot_df = umap_data[umap_data['doi'].isin(working_df['doi'].tolist())]
         topics_df = load_topics()
 
-
-        # plot_df = working_df.copy()
-
         with col2:
             with st.spinner("Loading Research Paper Details"):  
                 working_df_copy = st.session_state.labels_data
                 working_df_copy = working_df_copy[working_df_copy['doi'].isin(working_df['doi'].tolist())]
-                # st.markdown("###### Research Landscape Visualized")
 
                 with st.expander("Number of Papers Visualized", expanded=True):
-
                     st.markdown(f"**{len(working_df_copy):,}**")
-            
-
-                # with st.expander("Number of Research Clusters", expanded=True):
-                #     st.markdown(f"**{len(clusters):,}**")
 
                 # drop down of to select paper 
                 with st.expander("Select Paper", expanded=True):
-                    selected_paper = st.selectbox(
-                        "Select Paper", 
-                        plot_df['title'].tolist(),
-                        key="paper_selector"
-                    )
+                    if not plot_df.empty:
+                        selected_paper = st.selectbox(
+                            "Select Paper", 
+                            plot_df['title'].tolist(),
+                            key="paper_selector"
+                        )
 
-                    filtered_data = load_abstract_data(selected_paper)
+                        filtered_data = load_abstract_data(selected_paper)
 
-                    # seelct doi 
-                    # selected_doi = working_df_copy[working_df_copy['title'] == selected_paper]['doi'].values[0]
+                        if not filtered_data.empty:
+                            st.markdown("###### Paper Details")
+                            # Display the selected paper's details
 
-                    # create vertical table of paper, abstract, mechanism and context 
-                    st.markdown("###### Paper Details")
-                    # Display the selected paper's details
+                            authors = filtered_data['authors'].to_list()
+                            authors = ast.literal_eval(authors[0])
+                            authors = [author for author in authors if author != 'Insufficient info']
+                            authors = ', '.join(authors)
 
-                    authors = filtered_data['authors'].to_list()
+                            context = filtered_data['poverty_context'].to_list()
+                            context = list(set(context))
+                            context = [c for c in context if c != 'Insufficient info']
+                            if len(context) > 1:
+                                context = ', '.join(context)
+                            elif len(context) == 1:
+                                context = context[0]
+                            else:
+                                context = "None"
+                            
+                            study_types = filtered_data['study_type'].to_list()
+                            study_types = [study for study in study_types if study != 'Insufficient info']
+                            study_types = list(set(study_types))
+                            if len(study_types) > 1:
+                                study_types = ', '.join(study_types)
+                            elif len(study_types) == 1:
+                                study_types = study_types[0]
+                            else:
+                                study_types = "None"
 
-                    authors = ast.literal_eval(authors[0])
-                    authors = [author for author in authors if author != 'Insufficient info']
-                    authors = ', '.join(authors)
+                            mechanisms =  filtered_data['mechanism'].to_list()
+                            mechanisms = [m for m in mechanisms if m != 'Insufficient info']
+                            mechanisms = list(set(mechanisms))
 
+                            behavior = filtered_data['behavior'].to_list()
+                            behavior = [b for b in behavior if b != 'Insufficient info']
+                            behavior = list(set(behavior))
+                            if len(behavior) > 1:
+                                behavior = ', '.join(behavior)
+                            elif len(behavior) == 1:
+                                behavior = behavior[0]
+                            else:
+                                behavior = "None"
 
+                            if len(mechanisms) > 1:
+                                mechanisms = ', '.join(mechanisms)
+                            elif len(mechanisms) == 1:
+                                mechanisms = mechanisms[0]
+                            else:
+                                mechanisms = "None"
 
-                    context = filtered_data['poverty_context'].to_list()
-                    context = list(set(context))
-                    context = [c for c in context if c != 'Insufficient info']
-                    if len(context) > 1:
-                        context = ', '.join(context)
-                    elif len(context) == 1:
-                        context = context[0]
+                            st.markdown(f"**Title:** {filtered_data['title'].values[0]}")
+                            st.markdown(f"**Authors:** {authors}")
+                            st.markdown(f"**Context:** {context}")
+                            st.markdown(f"**Study Type:** {study_types}")
+                            st.markdown(f"**Mechanism:** {mechanisms}")
+                            st.markdown(f"**Behavior:** {behavior}")
+                            st.markdown(f"**Abstract:** {filtered_data['abstract'].values[0]}")
+                        else:
+                            st.write("No details available for selected paper.")
                     else:
-                        context = "None"
-                    study_types = filtered_data['study_type'].to_list()
-                    # working_df[working_df['doi'] == selected_doi]['study_type'].values
-                    study_types = [study for study in study_types if study != 'Insufficient info']
-                    study_types = list(set(study_types))
-                    if len(study_types) > 1:
-                        study_types = ', '.join(study_types)
-                    elif len(study_types) == 1:
-                        study_types = study_types[0]
-                    else:
-                        study_types = "None"
-
-                    mechanisms =  filtered_data['mechanism'].to_list()
-                    # working_df[working_df['doi'] == selected_doi]['mechanism'].values
-                    mechanisms = [m for m in mechanisms if m != 'Insufficient info']
-                    mechanisms = list(set(mechanisms))
-
-                    behavior = filtered_data['behavior'].to_list()
-                    # working_df[working_df['doi'] == selected_doi]['behavior'].values
-                    behavior = [b for b in behavior if b != 'Insufficient info']
-                    behavior = list(set(behavior))
-                    if len(behavior) > 1:
-                        behavior = ', '.join(behavior)
-                    elif len(behavior) == 1:
-                        behavior = behavior[0]
-                    else:
-                        behavior = "None"
-
-                    if len(mechanisms) > 1:
-                        mechanisms = ', '.join(mechanisms)
-                    elif len(mechanisms) == 1:
-                        mechanisms = mechanisms[0]
-                    else:
-                        mechanisms = "None"
-
-
-                    
-
-                    st.markdown(f"**Title:** {filtered_data['title'].values[0]}")
-                    st.markdown(f"**Authors:** {authors}")
-                    st.markdown(f"**Context:** {context}")
-                    st.markdown(f"**Study Type:** {study_types}")
-                    st.markdown(f"**Mechanism:** {mechanisms}")
-                    st.markdown(f"**Behavior:** {behavior}")
-                    st.markdown(f"**Abstract:** {filtered_data['abstract'].values[0]}")
+                        st.write("No papers available for visualization with current filters.")
 
         with col1:
             with st.spinner("Generating research landscape visualization..."):
+                # if not plot_df.empty and not topics_df.empty:
                 plot_df['UMAP1'] = pd.to_numeric(plot_df['UMAP1'], errors='coerce')
                 plot_df['UMAP2'] = pd.to_numeric(plot_df['UMAP2'], errors='coerce')
                 topics_df['umap_1_mean'] = pd.to_numeric(topics_df['umap_1_mean'], errors='coerce')
