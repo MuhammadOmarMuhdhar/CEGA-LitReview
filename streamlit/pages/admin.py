@@ -154,15 +154,14 @@ if not st.session_state['authenticated']:
     
     st.stop()
 
-# Initialize ETL Pipeline
+# Initialize ETL Pipeline - ONLY CACHE THE RESOURCE CREATION
 @st.cache_resource
 def initialize_pipeline():
     """Initialize and cache the ETL pipeline"""
     return main.ETLPipeline(
         api_key=api_key,
         credentials_json=credentials,
-        spreadsheet_id_json=spreadsheet_ids,
-        limit=None
+        project_id= 'literature-452020',
     )
 
 data_pipeline = initialize_pipeline()
@@ -232,21 +231,15 @@ def display_paper_details(papers_df, key=None, show_delete=False, client=None):
         st.markdown(f"**Authors:** {selected_paper_details['authors'].values[0]}")
         st.markdown(f"**Abstract:** {selected_paper_details['abstract'].values[0]}")
 
-
-    
-
-
+# ONLY CACHE THE BIGQUERY CLIENT CREATION - MINIMAL CHANGE
 @st.cache_resource
 def get_bigquery_client():
     return Client(credentials, 'literature-452020')
 
 client = get_bigquery_client()
 
-
-
-
 # Main content
-tab1, tab2, tab3, tab4 = st.tabs(["Update Database", "View Data", "Edit Database", "Logs"])
+tab1, tab3, tab4 = st.tabs(["Update Database", "Edit Database", "Logs"])
 
 with tab1:
     st.header("Update Database")
@@ -302,21 +295,6 @@ with tab1:
                 show_delete=True,
                 client=client
                 )
-
-# with tab2:
-#     st.header("View Data")
-#     # papers_df, topics_df = load_data()
-#     if not database_to_update.empty:
-#         st.dataframe(database_to_update[['doi', 'title', 'authors', 'abstract', 'country', 'institution', 'study_type', 'poverty_context', 'mechanism', 'behavior']], use_container_width=True)
-#     else:
-#         st.info("No data available")
-
-#     # button to reload with st.rerun
-#     if st.button("Reload Data"):
-#         with st.spinner("Reloading data..."):
-#             # Clear cache and reload
-#             load_data.clear()
-#             st.rerun()
 
 with tab3:
 
