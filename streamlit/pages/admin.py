@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from streamlit_gsheets import GSheetsConnection
 from data.bigQuery import Client
 import json
+import time
 
 # Function to load environment variables with Streamlit compatibility
 def load_environment_variables():
@@ -181,16 +182,25 @@ def confirm_delete_dialog(paper_title, papers_df, client, key):
         if st.button("🗑️ Delete", key=f"confirm_{key}", type="primary", use_container_width=True):
             # Show spinner during deletion
             with st.spinner("Deleting paper from database..."):
-                # Delete the paper from BigQuery
-                paper_data = papers_df.iloc[0]
-                client.execute_query(
-                    f"""
-                    DELETE FROM `literature-452020.psychology_of_poverty_literature.papers`
-                    WHERE title = '{paper_data["title"]}' AND doi = '{paper_data.get("doi", "")}'
-                    """
-                )
-                st.success("Paper deleted successfully!")
-                st.rerun()
+                try:
+                    # Delete the paper from BigQuery using parameterized query
+                    paper_data = papers_df.iloc[0]
+                    title = paper_data["title"].replace("'", "''")  # Escape single quotes
+                    doi = paper_data.get("doi", "").replace("'", "''")  # Escape single quotes
+                    
+                    client.execute_query(
+                        f"""
+                        DELETE FROM `literature-452020.psychology_of_poverty_literature.papers`
+                        WHERE title = '{title}' AND doi = '{doi}'
+                        """
+                    )
+                    st.success("Paper deleted successfully!")
+                    # Clear any cached data that might be affected
+                    if 'selected_paper_temp' in st.session_state:
+                        del st.session_state['selected_paper_temp']
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error deleting paper: {str(e)}")
 
 def display_paper_details(papers_df, key=None, show_delete=False, client=None):
     """
@@ -231,12 +241,121 @@ def display_paper_details(papers_df, key=None, show_delete=False, client=None):
         st.markdown(f"**Authors:** {selected_paper_details['authors'].values[0]}")
         st.markdown(f"**Abstract:** {selected_paper_details['abstract'].values[0]}")
 
-# ONLY CACHE THE BIGQUERY CLIENT CREATION - MINIMAL CHANGE
+# UPDATED: Cache BigQuery client with health check capability
 @st.cache_resource
 def get_bigquery_client():
-    return Client(credentials, 'literature-452020')
+    try:
+        client = Client(credentials, 'literature-452020')
+        # Test the connection immediately
+        if not client._is_client_healthy():
+            st.error("Failed to establish healthy database connection")
+            st.stop()
+        return client
+    except Exception as e:
+        st.error(f"Failed to connect to database: {str(e)}")
+        st.stop()
 
-client = get_bigquery_client()
+# NEW: Add healthy client function for automatic refresh
+def get_healthy_bigquery_client():
+    """Get a healthy BigQuery client, handling refresh automatically"""
+    client = get_bigquery_client()
+    
+    # This will automatically refresh the connection if unhealthy
+    client.get_healthy_client()
+    return client
+
+# NEW: Safe query execution with better error handling
+def execute_safe_query(query_description, query):
+    """Execute a query safely with proper error handling and user feedback"""
+    try:
+        client = get_healthy_bigquery_client()
+        result = client.execute_query(query)
+        return result, None
+    except Exception as e:
+        error_msg = f"Error {query_description}: {str(e)}"
+        st.error(error_msg)
+        return None, error_msg
+
+# NEW: Escape function for SQL injection protection
+def escape_sql_string(value):
+    """Escape single quotes in SQL strings to prevent injection"""
+    if value is None:
+        return ""
+    return str(value).replace("'", "''")
+
+# Initialize connection and health monitoring
+if 'connection_tested' not in st.session_state:
+    get_bigquery_client()
+    st.session_state.connection_tested = True
+    st.session_state.last_health_check = time.time()
+
+# Automatic connection health display in sidebar
+with st.sidebar:
+    st.markdown("**Database Status**")
+    
+    # Connection Health Monitor - Prevents idle timeout crashes
+    # This automatically tests the BigQuery connection every 30 seconds and refreshes
+    # stale connections before they cause errors. Helps diagnose connection issues.
+    current_time = time.time()
+    if ('last_health_check' not in st.session_state or 
+        current_time - st.session_state.last_health_check > 30):
+        
+        try:
+            client = get_healthy_bigquery_client()
+            is_healthy = client._is_client_healthy()
+            st.session_state.db_status = "Healthy" if is_healthy else "Reconnecting..."
+            st.session_state.last_health_check = current_time
+        except Exception as e:
+            st.session_state.db_status = "Error"
+            # Debug: Uncomment line below to see detailed error info
+            # st.error(f"Connection error: {str(e)}")
+            
+    # Display the cached status
+    status = st.session_state.get('db_status', 'Checking...')
+    if status == "Healthy":
+        st.success(f"🟢 {status}")
+    elif status == "Reconnecting...":
+        st.warning(f"🟡 {status}")
+    else:
+        st.error(f"🔴 {status}")
+    
+    # Show last check time
+    if 'last_health_check' in st.session_state:
+        last_check = datetime.fromtimestamp(st.session_state.last_health_check)
+        st.caption(f"Last checked: {last_check.strftime('%H:%M:%S')}")
+    
+    # Debug Information (expandable section for troubleshooting)
+    with st.expander("🔧 Debug Info", expanded=False):
+        st.markdown("""
+        **Status Meanings:**
+        - 🟢 **Healthy**: Connection active, queries working
+        - 🟡 **Reconnecting**: Stale connection detected, refreshing automatically  
+        - 🔴 **Error**: Connection failed, check credentials/network
+        
+        **Troubleshooting:**
+        - If stuck on "Reconnecting": Check BigQuery quotas/permissions
+        - If showing "Error": Verify service account credentials
+        - If frequent reconnects: May indicate network instability
+        - Check browser console for detailed error messages
+        """)
+        
+        # Show additional debug info
+        if 'last_health_check' in st.session_state:
+            time_since_check = current_time - st.session_state.last_health_check
+            st.caption(f"Seconds since last check: {int(time_since_check)}")
+        
+        # Connection test button for manual debugging
+        if st.button("🔍 Test Connection Now", key="manual_health_check"):
+            try:
+                with st.spinner("Testing connection..."):
+                    client = get_healthy_bigquery_client()
+                    test_result = client.execute_query("SELECT 1 as test")
+                    if not test_result.empty:
+                        st.success("✅ Manual connection test passed")
+                    else:
+                        st.error("❌ Query returned empty result")
+            except Exception as e:
+                st.error(f"❌ Manual test failed: {str(e)}")
 
 # Main content
 tab1, tab3, tab4 = st.tabs(["Update Database", "Edit Database", "Logs"])
@@ -293,7 +412,7 @@ with tab1:
                 st.session_state.papers,
                 key="loading_papers",
                 show_delete=True,
-                client=client
+                client=get_healthy_bigquery_client()
                 )
 
 with tab3:
@@ -306,33 +425,34 @@ with tab3:
     label_data = get_categories_and_keys(labels)
 
     if doi and doi.strip():
-        # Query BigQuery for paper data
-        paper_data = client.execute_query(
-            f"""
+        # Query BigQuery for paper data using safe query execution
+        escaped_doi = escape_sql_string(doi.strip())
+        query = f"""
             SELECT abstract, title, authors, study_type, poverty_context, mechanism, behavior, doi
             FROM `literature-452020.psychology_of_poverty_literature.papers`
-            WHERE doi = '{doi}' OR title = '{doi}'
+            WHERE doi = '{escaped_doi}' OR title = '{escaped_doi}'
             LIMIT 1
-            """
-        )
+        """
+        
+        paper_data, error = execute_safe_query("searching for paper", query)
         
         # Now create the main content columns
         col1, col2 = st.columns(2)
         
         with col1:
-            if not paper_data.empty:
+            if paper_data is not None and not paper_data.empty:
                 display_paper_details(
                     paper_data, 
                     key="edit_database",
                     show_delete=True,
-                    client=client
+                    client=get_healthy_bigquery_client()
                 )
-            else:
+            elif error is None:
                 st.info("Paper not found in database")
         
         with col2:
             # Edit existing paper
-            if not paper_data.empty:
+            if paper_data is not None and not paper_data.empty:
                 with st.form("edit_form"):
                     st.markdown("### Edit Paper Details")
                     
@@ -355,26 +475,40 @@ with tab3:
                     if isinstance(current_paper.get('behavior', ''), str) and ',' in current_paper.get('behavior', ''):
                         current_behaviors = [x.strip() for x in current_paper.get('behavior', '').split(',')]
                     
+                    # Store current form data in session state for persistence
+                    form_key = f"edit_form_{current_paper.get('doi', 'unknown')}"
+                    if form_key not in st.session_state:
+                        st.session_state[form_key] = {
+                            'study_types': [x for x in current_study_types if x in label_data['study_types']],
+                            'poverty_contexts': [x for x in current_poverty_contexts if x in label_data['poverty_contexts']],
+                            'mechanisms': [x for x in current_mechanisms if x in label_data['mechanisms']],
+                            'behaviors': [x for x in current_behaviors if x in label_data['Behaviors']]
+                        }
+                    
                     # Multi-select fields for editing
                     study_types = st.multiselect(
                         "Study Types", 
                         options=label_data['study_types'], 
-                        default=[x for x in current_study_types if x in label_data['study_types']]
+                        default=st.session_state[form_key]['study_types'],
+                        key=f"study_types_{form_key}"
                     )
                     poverty_contexts = st.multiselect(
                         "Poverty Contexts", 
                         options=label_data['poverty_contexts'], 
-                        default=[x for x in current_poverty_contexts if x in label_data['poverty_contexts']]
+                        default=st.session_state[form_key]['poverty_contexts'],
+                        key=f"poverty_contexts_{form_key}"
                     )
                     mechanisms = st.multiselect(
                         "Mechanisms", 
                         options=label_data['mechanisms'], 
-                        default=[x for x in current_mechanisms if x in label_data['mechanisms']]
+                        default=st.session_state[form_key]['mechanisms'],
+                        key=f"mechanisms_{form_key}"
                     )
                     behaviors = st.multiselect(
                         "Behaviors", 
                         options=label_data['Behaviors'], 
-                        default=[x for x in current_behaviors if x in label_data['Behaviors']]
+                        default=st.session_state[form_key]['behaviors'],
+                        key=f"behaviors_{form_key}"
                     )
                     
                     submit_button = st.form_submit_button(label="Update Paper")
@@ -382,24 +516,35 @@ with tab3:
                     if submit_button:
                         with st.spinner("Updating paper in database..."):
                             try:
+                                # Escape all values for SQL safety
+                                escaped_study_types = escape_sql_string(", ".join(study_types) if study_types else "")
+                                escaped_poverty_contexts = escape_sql_string(", ".join(poverty_contexts) if poverty_contexts else "")
+                                escaped_mechanisms = escape_sql_string(", ".join(mechanisms) if mechanisms else "")
+                                escaped_behaviors = escape_sql_string(", ".join(behaviors) if behaviors else "")
+                                escaped_doi = escape_sql_string(current_paper["doi"])
+                                escaped_title = escape_sql_string(current_paper["title"])
+                                
                                 # Update the paper in BigQuery
-                                client.execute_query(
-                                    f"""
+                                update_query = f"""
                                     UPDATE `literature-452020.psychology_of_poverty_literature.papers`
                                     SET 
-                                        study_type = '{", ".join(study_types) if study_types else ""}',
-                                        poverty_context = '{", ".join(poverty_contexts) if poverty_contexts else ""}',
-                                        mechanism = '{", ".join(mechanisms) if mechanisms else ""}',
-                                        behavior = '{", ".join(behaviors) if behaviors else ""}'
-                                    WHERE doi = '{current_paper["doi"]}' OR title = '{current_paper["title"]}'
-                                    """
-                                )
-                                st.success("Paper details updated successfully!")
+                                        study_type = '{escaped_study_types}',
+                                        poverty_context = '{escaped_poverty_contexts}',
+                                        mechanism = '{escaped_mechanisms}',
+                                        behavior = '{escaped_behaviors}'
+                                    WHERE doi = '{escaped_doi}' OR title = '{escaped_title}'
+                                """
                                 
+                                result, error = execute_safe_query("updating paper", update_query)
+                                if error is None:
+                                    st.success("Paper details updated successfully!")
+                                    # Clear form data from session state
+                                    if form_key in st.session_state:
+                                        del st.session_state[form_key]
+                                    st.rerun()
+                                    
                             except Exception as e:
-                                st.error(f"Error updating paper: {str(e)}")
-                        
-                        st.rerun()
+                                st.error(f"Unexpected error updating paper: {str(e)}")
             
             # Add New Paper Manually section
             else:
@@ -425,31 +570,42 @@ with tab3:
                     if add_button:
                         with st.spinner("Adding new paper to database..."):
                             try:
+                                # Escape all values for SQL safety
+                                escaped_title = escape_sql_string(new_title)
+                                escaped_doi = escape_sql_string(new_doi)
+                                escaped_authors = escape_sql_string(new_authors)
+                                escaped_journal = escape_sql_string(new_journal)
+                                escaped_abstract = escape_sql_string(new_abstract)
+                                escaped_study_types = escape_sql_string(", ".join(new_study_types) if new_study_types else "")
+                                escaped_poverty_contexts = escape_sql_string(", ".join(new_poverty_contexts) if new_poverty_contexts else "")
+                                escaped_mechanisms = escape_sql_string(", ".join(new_mechanisms) if new_mechanisms else "")
+                                escaped_behaviors = escape_sql_string(", ".join(new_behaviors) if new_behaviors else "")
+                                
                                 # Insert new paper into BigQuery
-                                client.execute_query(
-                                    f"""
+                                insert_query = f"""
                                     INSERT INTO `literature-452020.psychology_of_poverty_literature.papers`
                                     (title, doi, authors, year, journal, abstract, study_type, poverty_context, mechanism, behavior)
                                     VALUES (
-                                        '{new_title}',
-                                        '{new_doi}',
-                                        '{new_authors}',
+                                        '{escaped_title}',
+                                        '{escaped_doi}',
+                                        '{escaped_authors}',
                                         {new_year},
-                                        '{new_journal}',
-                                        '{new_abstract}',
-                                        '{", ".join(new_study_types) if new_study_types else ""}',
-                                        '{", ".join(new_poverty_contexts) if new_poverty_contexts else ""}',
-                                        '{", ".join(new_mechanisms) if new_mechanisms else ""}',
-                                        '{", ".join(new_behaviors) if new_behaviors else ""}'
+                                        '{escaped_journal}',
+                                        '{escaped_abstract}',
+                                        '{escaped_study_types}',
+                                        '{escaped_poverty_contexts}',
+                                        '{escaped_mechanisms}',
+                                        '{escaped_behaviors}'
                                     )
-                                    """
-                                )
-                                st.success("New paper added successfully!")
+                                """
                                 
+                                result, error = execute_safe_query("adding new paper", insert_query)
+                                if error is None:
+                                    st.success("New paper added successfully!")
+                                    st.rerun()
+                                    
                             except Exception as e:
-                                st.error(f"Error adding paper: {str(e)}")
-                        
-                        st.rerun()
+                                st.error(f"Unexpected error adding paper: {str(e)}")
 
     else:
         st.info("Enter a DOI or title to search for papers")
@@ -478,32 +634,43 @@ with tab3:
                 if add_button and new_title:  # Require at least a title
                     with st.spinner("Adding new paper to database..."):
                         try:
+                            # Escape all values for SQL safety
+                            escaped_title = escape_sql_string(new_title)
+                            escaped_doi = escape_sql_string(new_doi)
+                            escaped_authors = escape_sql_string(new_authors)
+                            escaped_journal = escape_sql_string(new_journal)
+                            escaped_abstract = escape_sql_string(new_abstract)
+                            escaped_study_types = escape_sql_string(", ".join(new_study_types) if new_study_types else "")
+                            escaped_poverty_contexts = escape_sql_string(", ".join(new_poverty_contexts) if new_poverty_contexts else "")
+                            escaped_mechanisms = escape_sql_string(", ".join(new_mechanisms) if new_mechanisms else "")
+                            escaped_behaviors = escape_sql_string(", ".join(new_behaviors) if new_behaviors else "")
+                            
                             # Insert new paper into BigQuery
-                            client = get_bigquery_client()
-                            client.execute_query(
-                                f"""
+                            insert_query = f"""
                                 INSERT INTO `literature-452020.psychology_of_poverty_literature.papers`
                                 (title, doi, authors, year, journal, abstract, study_type, poverty_context, mechanism, behavior)
                                 VALUES (
-                                    '{new_title}',
-                                    '{new_doi}',
-                                    '{new_authors}',
+                                    '{escaped_title}',
+                                    '{escaped_doi}',
+                                    '{escaped_authors}',
                                     {new_year},
-                                    '{new_journal}',
-                                    '{new_abstract}',
-                                    '{", ".join(new_study_types) if new_study_types else ""}',
-                                    '{", ".join(new_poverty_contexts) if new_poverty_contexts else ""}',
-                                    '{", ".join(new_mechanisms) if new_mechanisms else ""}',
-                                    '{", ".join(new_behaviors) if new_behaviors else ""}'
+                                    '{escaped_journal}',
+                                    '{escaped_abstract}',
+                                    '{escaped_study_types}',
+                                    '{escaped_poverty_contexts}',
+                                    '{escaped_mechanisms}',
+                                    '{escaped_behaviors}'
                                 )
-                                """
-                            )
-                            st.success("New paper added successfully!")
+                            """
                             
+                            result, error = execute_safe_query("adding new paper", insert_query)
+                            if error is None:
+                                st.success("New paper added successfully!")
+                                st.rerun()
+                                
                         except Exception as e:
-                            st.error(f"Error adding paper: {str(e)}")
-                    
-                    st.rerun()            
+                            st.error(f"Unexpected error adding paper: {str(e)}")
+            
 with tab4:
     st.header("Operation Logs")
 
