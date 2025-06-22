@@ -47,6 +47,31 @@ class Client:
         self.logger.info("BigQuery client built successfully")
         return client
     
+    def _is_client_healthy(self):
+        """Check if the BigQuery client connection is still healthy"""
+        try:
+            # Simple query to test connection - should complete in <1 second
+            test_query = "SELECT 1 as test_connection"
+            query_job = self.client.query(test_query)
+            query_job.result(timeout=5)  # 5 second timeout
+            return True
+        except Exception as e:
+            self.logger.warning(f"Client health check failed: {e}")
+            return False
+
+    def _refresh_client(self):
+        """Rebuild the BigQuery client with fresh credentials"""
+        self.logger.info("Refreshing BigQuery client connection")
+        self.client = self._build_client()
+        return self.client
+
+    def get_healthy_client(self):
+        """Get a healthy BigQuery client, refreshing if necessary"""
+        if not self._is_client_healthy():
+            self.logger.info("Client unhealthy, refreshing connection")
+            self._refresh_client()
+        return self.client
+    
     def _sanitize_cell_value(self, value):
         """
         Comprehensive sanitization of individual cell values for BigQuery
@@ -412,14 +437,20 @@ class Client:
             raise
     
     def execute_query(self, query, use_storage_api=True):
-        """Execute query with BigQuery Storage API for faster downloads"""
+        """Execute query with connection health check"""
         try:
+            # Ensure we have a healthy client
+            client = self.get_healthy_client()
+            
             job_config = bigquery.QueryJobConfig(use_query_cache=True)
-            query_job = self.client.query(query, job_config=job_config)
+            query_job = client.query(query, job_config=job_config)
             
             if use_storage_api:
-                # This is significantly faster for large datasets
-                df = query_job.to_dataframe(create_bqstorage_client=True)
+                try:
+                    df = query_job.to_dataframe(create_bqstorage_client=True)
+                except Exception as e:
+                    self.logger.warning(f"Storage API failed, using standard API: {e}")
+                    df = query_job.to_dataframe()
             else:
                 df = query_job.to_dataframe()
                 

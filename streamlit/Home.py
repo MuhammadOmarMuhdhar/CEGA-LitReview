@@ -246,15 +246,28 @@ st.sidebar.markdown("""
 @st.cache_resource
 def get_bigquery_client():
     try:
-        return Client(credentials, 'literature-452020')
+        client = Client(credentials, 'literature-452020')
+        # Test the connection immediately
+        if not client._is_client_healthy():
+            st.error("Failed to establish healthy database connection")
+            st.stop()
+        return client
     except Exception as e:
         st.error(f"Failed to connect to database: {str(e)}")
         st.stop()
 
+def get_healthy_bigquery_client():
+    """Get a healthy BigQuery client, handling refresh automatically"""
+    client = get_bigquery_client()
+    
+    # This will automatically refresh the connection if unhealthy
+    client.get_healthy_client()
+    return client
+
 @st.cache_data(show_spinner="Connecting to Database...")
 def load_country_institution_data():
     try:
-        client = get_bigquery_client()
+        client = get_healthy_bigquery_client()
         return client.execute_query(
             "SELECT doi, country, date, institution, country_of_study "
             "FROM `literature-452020.psychology_of_poverty_literature.papers`"
@@ -266,7 +279,7 @@ def load_country_institution_data():
 @ st.cache_data(show_spinner="Loading Sankey Diagram Data...")
 def load_label_data():
     try:
-        client = get_bigquery_client()
+        client = get_healthy_bigquery_client()
         return client.execute_query(
             "SELECT doi, authors, study_type, poverty_context, "
             "mechanism, behavior "
@@ -279,7 +292,7 @@ def load_label_data():
 @st.cache_data(show_spinner="Loading Topics...")
 def load_topics():
     try:
-        client = get_bigquery_client()
+        client = get_healthy_bigquery_client()
         return client.execute_query(
             "SELECT * "
             "FROM `literature-452020.psychology_of_poverty_literature.topics`"
@@ -291,7 +304,7 @@ def load_topics():
 @st.cache_data(show_spinner="Loading Abstract Data...")
 def load_abstract_data(title):
     try:
-        client = get_bigquery_client()
+        client = get_healthy_bigquery_client()
         # Handle all problematic characters
         safe_title = title.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
         
@@ -310,7 +323,7 @@ def load_abstract_data(title):
 @st.cache_data(show_spinner="Loading Heat Map Data...")
 def load_umap():
     try:
-        client = get_bigquery_client()
+        client = get_healthy_bigquery_client()
         return client.execute_query(
             f"""
             SELECT  title, doi, UMAP1, UMAP2, date
@@ -457,13 +470,27 @@ def paper_details_fragment():
 
 def main():  
 
-    try:
+    import time
+
+    try: 
         if 'connection_tested' not in st.session_state:
-            get_bigquery_client()
+            client = get_healthy_bigquery_client()
             st.session_state.connection_tested = True
+            st.session_state.last_health_check = time.time()
+
     except Exception as e:
         st.error("Database connection failed. Please refresh the page.")
-        st.stop()  
+        st.stop()
+
+
+    # if st.sidebar.button("Test DB Connection"):
+    #     client = get_healthy_bigquery_client()
+    #     if client._is_client_healthy():
+    #         st.sidebar.success("Database connection healthy")
+    #     else:
+    #         st.sidebar.error("Database connection failed")
+
+  
 
     # Initialize persistent UI state in session state (small objects only!)
     if 'ui_state' not in st.session_state:
