@@ -19,7 +19,7 @@ def load_filters_json():
         return json.load(f)
 
 # NEW: Pre-process expensive operations once
-@st.cache_data(show_spinner="Pre-processing data for optimal performance...")
+@st.cache_data(show_spinner="Processing data...")
 def preprocess_papers_data(papers_df):
     """One-time expensive preprocessing to avoid repeated ast.literal_eval calls"""
     df = papers_df.copy()
@@ -207,6 +207,7 @@ st.sidebar.markdown("""
                         unsafe_allow_html=True,
 )
 
+@st.cache_resource
 def get_bigquery_client():
     try:
         return Client(credentials, 'literature-452020')
@@ -239,6 +240,7 @@ def load_label_data():
         st.error(f"Failed to load label data: {str(e)}")
         return pd.DataFrame()
 
+@st.cache_data(show_spinner="Loading Topics...")
 def load_topics():
     try:
         client = get_bigquery_client()
@@ -250,6 +252,7 @@ def load_topics():
         st.error(f"Failed to load topics: {str(e)}")
         return pd.DataFrame()
 
+@st.cache_data(show_spinner="Loading Abstract Data...")
 def load_abstract_data(title):
     try:
         client = get_bigquery_client()
@@ -282,7 +285,15 @@ def load_umap():
         st.error(f"Failed to load UMAP data: {str(e)}")
         return pd.DataFrame()
 
-def main():    
+def main():  
+
+    try:
+        if 'connection_tested' not in st.session_state:
+            get_bigquery_client()
+            st.session_state.connection_tested = True
+    except Exception as e:
+        st.error("Database connection failed. Please refresh the page.")
+        st.stop()  
 
     col1, col2 = st.columns([4, 1.5])
     with col1:
