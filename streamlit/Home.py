@@ -12,6 +12,9 @@ sys.path.append(parent_dir)
 from visuals import bar, sankey, heatMap
 from data.bigQuery import Client
 
+
+st.set_page_config(page_title="Workspace", layout="wide", initial_sidebar_state='collapsed')
+
 @st.cache_data
 def load_filters_json():
     """Load filters JSON once and cache it"""
@@ -148,14 +151,11 @@ def load_environment_variables():
     
     return get_env_var
 
-# Initialize environment variables handler
-if 'environment_variables' not in st.session_state:
-    st.session_state.environment_variables = load_environment_variables()
-
-get_env_var = st.session_state.environment_variables
-
+@st.cache_data
 def get_configuration():
     """Load and cache configuration from environment variables"""
+    get_env_var = load_environment_variables()
+    
     # Fetch API key from environment variables
     api_key = get_env_var("GEMINI_API_KEY")
     
@@ -179,14 +179,9 @@ def get_configuration():
     
     return api_key, credentials, email, password
 
-# Initialize and load configuration only once
-if 'configuration' not in st.session_state:
-    st.session_state.configuration = get_configuration()
-
 # Assign variables from cached configuration
-api_key, credentials, email, password = st.session_state.configuration
+api_key, credentials, email, password = get_configuration()
 
-st.set_page_config(page_title="Workspace", layout="wide", initial_sidebar_state='collapsed')
 
 st.sidebar.markdown("""
          <style>
@@ -285,6 +280,23 @@ def load_umap():
         st.error(f"Failed to load UMAP data: {str(e)}")
         return pd.DataFrame()
 
+@st.cache_data(show_spinner="Loading main papers data...")
+def get_papers_data():
+    return load_country_institution_data()
+
+@st.cache_data(show_spinner="Preprocessing papers...")
+def get_preprocessed_papers():
+    papers_df = get_papers_data()
+    return preprocess_papers_data(papers_df)
+
+@st.cache_data(show_spinner="Loading labels...")
+def get_labels_data():
+    return load_label_data()
+
+@st.cache_data(show_spinner="Loading UMAP...")
+def get_umap_data():
+    return load_umap()
+
 def main():  
 
     try:
@@ -366,15 +378,8 @@ def main():
     with tab1:
 
         # Load and preprocess data
-        if 'papers_df' not in st.session_state:
-            st.session_state.papers_df = load_country_institution_data()
-
-        # NEW: Preprocess the data once for lightning-fast filtering
-        if 'preprocessed_papers' not in st.session_state:
-            st.session_state.preprocessed_papers = preprocess_papers_data(st.session_state.papers_df)
-
-        papers_df = st.session_state.papers_df
-        preprocessed_papers = st.session_state.preprocessed_papers
+        papers_df = get_papers_data()
+        preprocessed_papers = get_preprocessed_papers()
 
         # Introduction
         st.markdown("""
@@ -493,10 +498,9 @@ def main():
         Performance decreases when visualizing a large number of papers.
         """)
             
-        col1, col2 = st.columns([1  , 6])
+        col1, col2 = st.columns([1, 6])
 
-        if "labels_data" not in st.session_state:
-            st.session_state.labels_data = load_label_data()
+        labels_data = get_labels_data()
         with col1:
 
             filters = load_filters_json()
@@ -559,7 +563,7 @@ def main():
                 else: 
                     all_selected_behaviors.append(value_list[1])
 
-            labels_df = st.session_state.labels_data
+            labels_df = labels_data
             sankey_working_df = labels_df[labels_df['doi'].isin(working_df['doi'].tolist())]           
             
             working_df_exploded = sankey_working_df.copy()
@@ -646,94 +650,10 @@ def main():
 
         col1, col2 = st.columns([2, 1])
 
-        if 'umap_data' not in st.session_state:
-                st.session_state.umap_data = load_umap()
-
-        umap_data = st.session_state.umap_data
+        umap_data = get_umap_data()
         # Filter UMAP data to only include papers in the working_df
         plot_df = umap_data[umap_data['doi'].isin(working_df_exploded['doi'].tolist())]
         topics_df = load_topics()
-
-        with col2:
-            with st.spinner("Loading Research Paper Details"):  
-                working_df_copy = st.session_state.labels_data
-                working_df_copy = working_df_copy[working_df_copy['doi'].isin(working_df_exploded['doi'].tolist())]
-
-                with st.expander("Number of Papers Visualized", expanded=True):
-                    st.markdown(f"**{len(working_df_copy):,}**")
-
-                # drop down of to select paper 
-                with st.expander("Select Paper", expanded=True):
-                    if not plot_df.empty:
-                        selected_paper = st.selectbox(
-                            "Select Paper", 
-                            plot_df['title'].tolist(),
-                            key="paper_selector"
-                        )
-
-                        filtered_data = load_abstract_data(selected_paper)
-
-                        if not filtered_data.empty:
-                            st.markdown("###### Paper Details")
-                            # Display the selected paper's details
-
-                            authors = filtered_data['authors'].to_list()
-                            authors = ast.literal_eval(authors[0])
-                            authors = [author for author in authors if author != 'Insufficient info']
-                            authors = ', '.join(authors)
-
-                            context = filtered_data['poverty_context'].to_list()
-                            context = list(set(context))
-                            context = [c for c in context if c != 'Insufficient info']
-                            if len(context) > 1:
-                                context = ', '.join(context)
-                            elif len(context) == 1:
-                                context = context[0]
-                            else:
-                                context = "None"
-                            
-                            study_types = filtered_data['study_type'].to_list()
-                            study_types = [study for study in study_types if study != 'Insufficient info']
-                            study_types = list(set(study_types))
-                            if len(study_types) > 1:
-                                study_types = ', '.join(study_types)
-                            elif len(study_types) == 1:
-                                study_types = study_types[0]
-                            else:
-                                study_types = "None"
-
-                            mechanisms =  filtered_data['mechanism'].to_list()
-                            mechanisms = [m for m in mechanisms if m != 'Insufficient info']
-                            mechanisms = list(set(mechanisms))
-
-                            behavior = filtered_data['behavior'].to_list()
-                            behavior = [b for b in behavior if b != 'Insufficient info']
-                            behavior = list(set(behavior))
-                            if len(behavior) > 1:
-                                behavior = ', '.join(behavior)
-                            elif len(behavior) == 1:
-                                behavior = behavior[0]
-                            else:
-                                behavior = "None"
-
-                            if len(mechanisms) > 1:
-                                mechanisms = ', '.join(mechanisms)
-                            elif len(mechanisms) == 1:
-                                mechanisms = mechanisms[0]
-                            else:
-                                mechanisms = "None"
-
-                            st.markdown(f"**Title:** {filtered_data['title'].values[0]}")
-                            st.markdown(f"**Authors:** {authors}")
-                            st.markdown(f"**Context:** {context}")
-                            st.markdown(f"**Study Type:** {study_types}")
-                            st.markdown(f"**Mechanism:** {mechanisms}")
-                            st.markdown(f"**Behavior:** {behavior}")
-                            st.markdown(f"**Abstract:** {filtered_data['abstract'].values[0]}")
-                        else:
-                            st.write("No details available for selected paper.")
-                    else:
-                        st.write("No papers available for visualization with current filters.")
 
         with col1:
             with st.spinner("Generating research landscape visualization..."):
@@ -830,7 +750,86 @@ def main():
                 - Gaussian density estimation creates smooth intensity surfaces
                 """)
 
+        with col2:
+            with st.spinner("Loading Research Paper Details"):  
+                working_df_copy = labels_data
+                working_df_copy = working_df_copy[working_df_copy['doi'].isin(working_df_exploded['doi'].tolist())]
 
+                with st.expander("Number of Papers Visualized", expanded=True):
+                    st.markdown(f"**{len(working_df_copy):,}**")
+
+                # drop down of to select paper 
+                with st.expander("Select Paper", expanded=True):
+                    if not plot_df.empty:
+                        selected_paper = st.selectbox(
+                            "Select Paper", 
+                            plot_df['title'].tolist(),
+                            key="paper_selector"
+                        )
+
+                        filtered_data = load_abstract_data(selected_paper)
+
+                        if not filtered_data.empty:
+                            st.markdown("###### Paper Details")
+                            # Display the selected paper's details
+
+                            authors = filtered_data['authors'].to_list()
+                            authors = ast.literal_eval(authors[0])
+                            authors = [author for author in authors if author != 'Insufficient info']
+                            authors = ', '.join(authors)
+
+                            context = filtered_data['poverty_context'].to_list()
+                            context = list(set(context))
+                            context = [c for c in context if c != 'Insufficient info']
+                            if len(context) > 1:
+                                context = ', '.join(context)
+                            elif len(context) == 1:
+                                context = context[0]
+                            else:
+                                context = "None"
+                            
+                            study_types = filtered_data['study_type'].to_list()
+                            study_types = [study for study in study_types if study != 'Insufficient info']
+                            study_types = list(set(study_types))
+                            if len(study_types) > 1:
+                                study_types = ', '.join(study_types)
+                            elif len(study_types) == 1:
+                                study_types = study_types[0]
+                            else:
+                                study_types = "None"
+
+                            mechanisms =  filtered_data['mechanism'].to_list()
+                            mechanisms = [m for m in mechanisms if m != 'Insufficient info']
+                            mechanisms = list(set(mechanisms))
+
+                            behavior = filtered_data['behavior'].to_list()
+                            behavior = [b for b in behavior if b != 'Insufficient info']
+                            behavior = list(set(behavior))
+                            if len(behavior) > 1:
+                                behavior = ', '.join(behavior)
+                            elif len(behavior) == 1:
+                                behavior = behavior[0]
+                            else:
+                                behavior = "None"
+
+                            if len(mechanisms) > 1:
+                                mechanisms = ', '.join(mechanisms)
+                            elif len(mechanisms) == 1:
+                                mechanisms = mechanisms[0]
+                            else:
+                                mechanisms = "None"
+
+                            st.markdown(f"**Title:** {filtered_data['title'].values[0]}")
+                            st.markdown(f"**Authors:** {authors}")
+                            st.markdown(f"**Context:** {context}")
+                            st.markdown(f"**Study Type:** {study_types}")
+                            st.markdown(f"**Mechanism:** {mechanisms}")
+                            st.markdown(f"**Behavior:** {behavior}")
+                            st.markdown(f"**Abstract:** {filtered_data['abstract'].values[0]}")
+                        else:
+                            st.write("No details available for selected paper.")
+                    else:
+                        st.write("No papers available for visualization with current filters.")
 
 if __name__ == "__main__":
     main()
