@@ -27,7 +27,6 @@ def monitor_and_clear_cache():
         if memory_mb > 1500:
             st.cache_data.clear()
             st.cache_resource.clear()
-            st.rerun()  # Rerun to refresh the page after clearing cache
             return True
         return False
     except Exception:
