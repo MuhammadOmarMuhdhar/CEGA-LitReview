@@ -492,8 +492,6 @@ def main():
         if 'connection_tested' not in st.session_state:
             client = get_healthy_bigquery_client()
             st.session_state.connection_tested = True
-            st.session_state.last_health_check = time.time()
-
     except Exception as e:
         st.error("Database connection failed. Please refresh the page.")
         st.stop()
