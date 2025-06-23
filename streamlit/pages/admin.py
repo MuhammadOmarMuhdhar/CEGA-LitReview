@@ -1,14 +1,12 @@
 import streamlit as st
 import os
 import sys 
-parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+parent_dir = os.path.abspath(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 sys.path.append(parent_dir)
-
 import pandas as pd
 from data.ETL import main
 from datetime import datetime
 from dotenv import load_dotenv
-from streamlit_gsheets import GSheetsConnection
 from data.bigQuery import Client
 import json
 import time
