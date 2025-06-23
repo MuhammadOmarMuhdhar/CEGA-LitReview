@@ -23,7 +23,7 @@ def monitor_and_clear_cache():
         memory_mb = process.memory_info().rss / 1024 / 1024
         
         # Clear cache if memory usage exceeds 2GB
-        if memory_mb > 1024:
+        if memory_mb > 2048:
             st.cache_data.clear()
             st.cache_resource.clear()
             return True
@@ -31,7 +31,6 @@ def monitor_and_clear_cache():
     except Exception:
         return False
 
-@st.cache_data
 def load_filters_json():
     """Load filters JSON once and cache it"""
     with open('data/trainingData/labels.json', 'r') as f:
