@@ -259,7 +259,7 @@ st.sidebar.markdown("""
                         unsafe_allow_html=True,
 )
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Connecting to Database...")
 def get_bigquery_client():
     try:
         client = Client(credentials, 'literature-452020')
