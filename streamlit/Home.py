@@ -9,6 +9,7 @@ import ast
 import json
 import psutil 
 import time
+import re
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(parent_dir)
 from visuals import bar, sankey, heatMap
@@ -22,10 +23,11 @@ def monitor_and_clear_cache():
         process = psutil.Process()
         memory_mb = process.memory_info().rss / 1024 / 1024
         
-        # Clear cache if memory usage exceeds 2GB
-        if memory_mb > 2048:
+        # Clear cache if memory usage exceeds 1.5GB
+        if memory_mb > 1500:
             st.cache_data.clear()
             st.cache_resource.clear()
+            st.rerun()  # Rerun to refresh the page after clearing cache
             return True
         return False
     except Exception:
@@ -36,15 +38,14 @@ def load_filters_json():
     with open('data/trainingData/labels.json', 'r') as f:
         return json.load(f)
 
-# NEW: Pre-process expensive operations once
-@st.cache_data(show_spinner="Processing data...")
+@st.cache_data(ttl=3600, max_entries=2, show_spinner="Processing data...")
 def preprocess_papers_data(papers_df):
-    """One-time expensive preprocessing to avoid repeated ast.literal_eval calls"""
+    """One-time expensive preprocessing with categorical optimization"""
     df = papers_df.copy()
     
     # Pre-parse institutions (convert lists to strings for caching)
     df['institutions_list'] = df['institution'].apply(
-        lambda x: str(list(dict.fromkeys([i for i in ast.literal_eval(x) if i is not None])))
+        lambda x: str(list(dict.fromkeys([i for i in ast.literal_eval(str(x)) if i is not None])))
     )
     
     # Pre-parse countries (convert lists to strings for caching)
@@ -52,10 +53,13 @@ def preprocess_papers_data(papers_df):
         lambda x: str([i.strip() for i in str(x).split(',') if i.strip() and i.strip().lower() != 'nan'])
     )
     
+    df['institutions_list'] = df['institutions_list'].astype('category')
+    df['countries_list'] = df['countries_list'].astype('category')
+    
     return df
 
 # Cache expensive data processing operations - NOW MUCH FASTER
-@st.cache_data(show_spinner="Loading Filters...")
+@st.cache_data(ttl=1800, max_entries=3, show_spinner="Loading Filters...")
 def process_countries_and_institutions(preprocessed_df):
     """Process and extract unique countries and institutions from preprocessed dataset"""
     # Extract unique countries from string representations
@@ -76,7 +80,7 @@ def process_countries_and_institutions(preprocessed_df):
     
     return sorted(countries), sorted(institutions)
 
-@st.cache_data(show_spinner="Loading Metadata Filters...")
+@st.cache_data(ttl=1800, max_entries=5, show_spinner="Loading Metadata Filters...")
 def lightning_fast_filter(preprocessed_df, selected_country, selected_institution):
     """Super fast filtering using preprocessed data - no more ast.literal_eval!"""
     result = preprocessed_df.copy()
@@ -91,7 +95,7 @@ def lightning_fast_filter(preprocessed_df, selected_country, selected_institutio
     
     return result
 
-@st.cache_data(show_spinner="Loading Metadata...")
+@st.cache_data(ttl=1800, max_entries=3, show_spinner="Loading Metadata...")
 def calculate_statistics(filtered_df, papers_df, selected_country, selected_institution):
     """Calculate statistics for the filtered dataset"""
     # Filter publications based on the DOIs in the working dataframe
@@ -135,21 +139,54 @@ def calculate_statistics(filtered_df, papers_df, selected_country, selected_inst
         'institutions_count': institutions_count
     }
 
-# NEW: Cache filtered data to avoid recomputation
-@st.cache_data(show_spinner="Filtering Data...")
 def get_filtered_data(selected_country, selected_institution):
     """Cache filtered results to avoid recomputation"""
     preprocessed_papers = get_preprocessed_papers()
     return lightning_fast_filter(preprocessed_papers, selected_country, selected_institution)
 
-# NEW: Cache expensive exploded DataFrame operations
-@st.cache_data(show_spinner="Preparing Sankey Diagram...")
 def get_exploded_sankey_data(working_df_dois, all_selected_context, all_selected_study_types, all_selected_mechanisms, all_selected_behaviors):
-    """Cache the expensive exploded DataFrame operations"""
+    """Filter FIRST, then explode - with categorical preservation"""
+    import re
+    
     labels_data = get_labels_data()
+    
+    # Step 1: Filter by DOIs first (smallest operation)
     sankey_working_df = labels_data[labels_data['doi'].isin(working_df_dois)]
     
+    # Step 2: Apply content filters BEFORE exploding
+    # Convert categorical to string for filtering, then back to categorical
+    
+    if all_selected_context:
+        context_pattern = '|'.join([re.escape(ctx) for ctx in all_selected_context])
+        # Convert categorical to string for str.contains, then filter
+        context_mask = sankey_working_df['poverty_context'].astype(str).str.contains(context_pattern, na=False, case=False)
+        sankey_working_df = sankey_working_df[context_mask]
+    
+    if all_selected_study_types:
+        study_pattern = '|'.join([re.escape(st) for st in all_selected_study_types])
+        study_mask = sankey_working_df['study_type'].astype(str).str.contains(study_pattern, na=False, case=False)
+        sankey_working_df = sankey_working_df[study_mask]
+    
+    if all_selected_mechanisms:
+        mechanism_pattern = '|'.join([re.escape(mech) for mech in all_selected_mechanisms])
+        mechanism_mask = sankey_working_df['mechanism'].astype(str).str.contains(mechanism_pattern, na=False, case=False)
+        sankey_working_df = sankey_working_df[mechanism_mask]
+    
+    if all_selected_behaviors:
+        behavior_pattern = '|'.join([re.escape(beh) for beh in all_selected_behaviors])
+        behavior_mask = sankey_working_df['behavior'].astype(str).str.contains(behavior_pattern, na=False, case=False)
+        sankey_working_df = sankey_working_df[behavior_mask]
+    
+    # Step 3: Convert categoricals to strings for exploding
     working_df_exploded = sankey_working_df.copy()
+    
+    # Convert categorical columns to string before string operations
+    categorical_columns = ['poverty_context', 'mechanism', 'study_type', 'behavior']
+    for col in categorical_columns:
+        if col in working_df_exploded.columns:
+            working_df_exploded[col] = working_df_exploded[col].astype(str)
+    
+    # Explode operations (now on string columns)
     working_df_exploded['poverty_context'] = working_df_exploded['poverty_context'].str.split(',')
     working_df_exploded = working_df_exploded.explode('poverty_context')
     working_df_exploded['poverty_context'] = working_df_exploded['poverty_context'].str.strip()
@@ -166,7 +203,7 @@ def get_exploded_sankey_data(working_df_dois, all_selected_context, all_selected
     working_df_exploded = working_df_exploded.explode('behavior')
     working_df_exploded['behavior'] = working_df_exploded['behavior'].str.strip()
 
-    # Apply sankey filters
+    # Step 4: Final exact filtering
     if all_selected_context:
         working_df_exploded = working_df_exploded[working_df_exploded['poverty_context'].isin(all_selected_context)]
     if all_selected_study_types:
@@ -175,6 +212,11 @@ def get_exploded_sankey_data(working_df_dois, all_selected_context, all_selected
         working_df_exploded = working_df_exploded[working_df_exploded['mechanism'].isin(all_selected_mechanisms)]
     if all_selected_behaviors:
         working_df_exploded = working_df_exploded[working_df_exploded['behavior'].isin(all_selected_behaviors)]
+    
+    # Step 5: Convert back to categorical for final DataFrame (optional but saves memory)
+    for col in categorical_columns:
+        if col in working_df_exploded.columns:
+            working_df_exploded[col] = working_df_exploded[col].astype('category')
     
     return working_df_exploded
 
@@ -209,7 +251,7 @@ def load_environment_variables():
     
     return get_env_var
 
-@st.cache_data(show_spinner="Preparing Sankey Diagram...")
+@st.cache_data(ttl=7200, max_entries=1, show_spinner="Loading Configuration...")
 def get_configuration():
     """Load and cache configuration from environment variables"""
     get_env_var = load_environment_variables()
@@ -280,32 +322,49 @@ def get_healthy_bigquery_client():
     client.get_healthy_client()
     return client
 
-@st.cache_data(show_spinner="Connecting to Database...")
+@st.cache_data(ttl=3600, max_entries=1, show_spinner="Connecting to Database...")
 def load_country_institution_data():
     try:
         client = get_healthy_bigquery_client()
-        return client.execute_query(
+        df = client.execute_query(
             "SELECT doi, country, date, institution, country_of_study "
             "FROM `literature-452020.psychology_of_poverty_literature.papers`"
         )
+        
+        categorical_columns = ['country', 'institution', 'country_of_study']
+        
+        for col in categorical_columns:
+            if col in df.columns:
+                df[col] = df[col].astype('category')
+                
+        return df
     except Exception as e:
         st.error(f"Failed to load data: {str(e)}")
         return pd.DataFrame()
 
-@ st.cache_data(show_spinner="Loading Sankey Diagram Data...")
+@st.cache_data(ttl=3600, max_entries=1, show_spinner="Loading Sankey Diagram Data...")
 def load_label_data():
     try:
         client = get_healthy_bigquery_client()
-        return client.execute_query(
+        df = client.execute_query(
             "SELECT doi, authors, study_type, poverty_context, "
             "mechanism, behavior "
             "FROM `literature-452020.psychology_of_poverty_literature.papers`"
         )
+        
+        categorical_columns = ['study_type', 'poverty_context', 'mechanism', 'behavior', 'authors']
+        
+        for col in categorical_columns:
+            if col in df.columns:
+                # Convert to categorical - massive memory savings
+                df[col] = df[col].astype('category')
+                
+        return df
     except Exception as e:
         st.error(f"Failed to load label data: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data(show_spinner="Loading Topics...")
+@st.cache_data(ttl=3600, max_entries=1, show_spinner="Loading Heatmap Data...")
 def load_topics():
     try:
         client = get_healthy_bigquery_client()
@@ -317,7 +376,7 @@ def load_topics():
         st.error(f"Failed to load topics: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data(show_spinner="Loading Abstract Data...")
+@st.cache_data(ttl=1800, max_entries=10, show_spinner="Loading Abstract Data...")
 def load_abstract_data(title):
     try:
         client = get_healthy_bigquery_client()
@@ -336,7 +395,7 @@ def load_abstract_data(title):
         st.error(f"Failed to load abstract data: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data(show_spinner="Loading Heat Map Data...")
+@st.cache_data(ttl=3600, max_entries=1, show_spinner="Loading Heat Map Data...")
 def load_umap():
     try:
         client = get_healthy_bigquery_client()
@@ -350,35 +409,28 @@ def load_umap():
         st.error(f"Failed to load UMAP data: {str(e)}")
         return pd.DataFrame()
     
-@st.cache_data(show_spinner="Preparing Sankey Diagram...")
 def get_working_df_exploded_cached(country, institution, contexts, study_types, mechanisms, behaviors):
-    """Cache the working_df_exploded calculation"""
-    # Get base filtered data
+    """Process on demand - now much faster due to pre-filtering"""
     working_df = get_filtered_data(country, institution)
     
-    # Get exploded sankey data
     return get_exploded_sankey_data(
         working_df['doi'].tolist(),
-        contexts,
-        study_types, 
-        mechanisms,
-        behaviors
+        list(contexts),  # Convert tuples to lists
+        list(study_types), 
+        list(mechanisms),
+        list(behaviors)
     )
 
-@st.cache_data(show_spinner="Connecting to database...")
 def get_papers_data():
     return load_country_institution_data()
 
-@st.cache_data(show_spinner="Preprocessing papers...")
 def get_preprocessed_papers():
     papers_df = get_papers_data()
     return preprocess_papers_data(papers_df)
 
-@st.cache_data(show_spinner="Loading labels...")
 def get_labels_data():
     return load_label_data()
 
-@st.cache_data(show_spinner="Loading heatmap data...")
 def get_umap_data():
     return load_umap()
 
@@ -400,11 +452,6 @@ def paper_details_fragment():
         available_papers = st.session_state.ui_state.get('current_papers_list', [])
         
         if available_papers:
-            # Performance optimization: limit dropdown size for large datasets
-            # if len(available_papers) > 1000:
-            #     st.info(f"Large dataset ({len(available_papers):,} papers). Showing first 1000 for performance.")
-            #     available_papers = available_papers[:1000]
-            
             # Use a completely independent selectbox
             selected_paper = st.selectbox(
                 "Select Paper", 
@@ -484,7 +531,146 @@ def paper_details_fragment():
         else:
             st.write("No papers available for visualization with current filters.")
 
+
+from functools import lru_cache
+
+@st.cache_data
+def load_and_process_filters():
+    """Cache the filter loading and tree building to avoid repeated computation"""
+    filters = load_filters_json()
+    
+    # Pre-build trees once and cache them
+    study_types_tree = build_tree_optimized(filters['study_types'])
+    mechanisms_tree = build_tree_optimized(filters['mechanisms']) 
+    behaviors_tree = build_tree_optimized(filters['Behaviors'])
+    
+    return filters, study_types_tree, mechanisms_tree, behaviors_tree
+
+def build_tree_optimized(data, path=""):
+    """Optimized tree builder - reduces string operations and memory allocation"""
+    if not data:
+        return []
+    
+    tree = []
+    for key, value in data.items():
+        node_path = f"{path} > {key}" if path else key
+        
+        if isinstance(value, dict):
+            children = build_tree_optimized(value, node_path)
+            tree.append({
+                "label": key,
+                "value": node_path,
+                "children": children
+            })
+        elif isinstance(value, list):
+            # Pre-allocate list and use list comprehension
+            children = [
+                {"label": item, "value": f"{node_path} > {item}"} 
+                for item in value
+            ]
+            tree.append({
+                "label": key,
+                "value": node_path,
+                "children": children
+            })
+    return tree
+
+def process_tree_selections(selections, min_depth=2):
+    """Optimized selection processing - reduces string splitting operations"""
+    if not selections or not selections.get('checked'):
+        return []
+    
+    result = []
+    for value in selections['checked']:
+        # Split once and reuse
+        parts = value.split(' > ')
+        if len(parts) >= min_depth:
+            result.append(parts[min_depth - 1])
+    return result
+
+@st.fragment
+def filter_selection_fragment():
+    """
+    Optimized filter selection fragment with caching and reduced memory usage
+    """
+    # Load cached data
+    filters, study_types_tree, mechanisms_tree, behaviors_tree = load_and_process_filters()
+    
+    # UI Components
+    st.markdown("###### Poverty Contexts")
+    selected_contexts = st.multiselect(
+        "Select", 
+        list(filters['poverty_contexts'].keys()), 
+        key="sankey_contexts"
+    )
+    
+    st.markdown("###### Study Types") 
+    selected_study_types = tree_select(study_types_tree, key="sankey_study_types")
+    
+    st.markdown("###### Psychological Mechanisms")
+    selected_mechanisms = tree_select(mechanisms_tree, key="sankey_mechanisms")
+    
+    st.markdown("###### Behavioral Outcomes")
+    selected_behaviors = tree_select(behaviors_tree, key="sankey_behaviors")
+    
+    # Process selections efficiently
+    all_selected_context = []
+    if selected_contexts:
+        # Use extend with generator for memory efficiency
+        for key in selected_contexts:
+            all_selected_context.extend(filters['poverty_contexts'][key])
+    
+    # Process tree selections with optimized function
+    all_selected_study_types = process_tree_selections(selected_study_types, min_depth=3)
+    all_selected_mechanisms = process_tree_selections(selected_mechanisms, min_depth=2)
+    all_selected_behaviors = process_tree_selections(selected_behaviors, min_depth=2)
+    
+    # Create signature more efficiently using frozenset for hashable collections
+    current_signature = hash((
+        frozenset(all_selected_context),
+        frozenset(all_selected_study_types), 
+        frozenset(all_selected_mechanisms),
+        frozenset(all_selected_behaviors)
+    ))
+    
+    previous_signature = st.session_state.get('filter_signature', 0)
+    
+    # Only update session state if values changed (reduces memory writes)
+    if current_signature != previous_signature:
+        st.session_state.update({
+            'filters': filters,
+            'selected_contexts': selected_contexts,
+            'all_selected_context': all_selected_context,
+            'all_selected_study_types': all_selected_study_types,
+            'all_selected_mechanisms': all_selected_mechanisms,
+            'all_selected_behaviors': all_selected_behaviors,
+            'filter_signature': current_signature
+        })
+        
+        # Only rerun if this isn't the initial load
+        if previous_signature != 0:
+            st.rerun()
+
+
+            
+
 def main():  
+
+    with st.sidebar:
+        st.markdown("### System Status")
+        
+        # Memory Usage
+        try:
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            
+            if memory_mb < 1500:
+                st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="Healthy")
+            else:
+                st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="High", delta_color="inverse")
+                
+        except ImportError:
+            st.metric("Memory Usage", "N/A", delta="Install psutil")
 
     monitor_and_clear_cache()
 
@@ -701,7 +887,7 @@ def main():
                     st.markdown(f"**{stats['countries_count']}**")
             
             with col4:
-                with st.expander("Institutions Represented", expanded=True):
+                with st.expander("Institutions", expanded=True):
                     st.markdown(f"**{stats['institutions_count']}**")
 
                     
@@ -742,70 +928,38 @@ def main():
 
         with col1:
 
-            filters = load_filters_json()
 
-            def build_tree(data, path=""):
-                tree = []
-                for key, value in data.items():
-                    node_path = f"{path} > {key}" if path else key
-                    if isinstance(value, dict):
-                        children = build_tree(value, node_path)
-                        tree.append({
-                            "label": key,
-                            "value": node_path,
-                            "children": children
-                        })
-                    elif isinstance(value, list):
-                        children = [{"label": item, "value": f"{node_path} > {item}"} for item in value]
-                        tree.append({
-                            "label": key,
-                            "value": node_path,
-                            "children": children
-                        })
-                return tree
-            
-            # Sankey filters with separate keys to avoid interference
-            st.markdown("###### Poverty Contexts")
-            selected_contexts = st.multiselect("Select", list(filters['poverty_contexts'].keys()), key="sankey_contexts")
-            st.markdown("###### Study Types")
-            selected_study_types = tree_select(build_tree(filters['study_types']), key="sankey_study_types")
-            st.markdown("###### Psychological Mechanisms")
-            selected_mechanisms = tree_select(build_tree(filters['mechanisms']), key="sankey_mechanisms")
-            st.markdown("###### Behavioral Outcomes")
-            selected_behaviors = tree_select(build_tree(filters['Behaviors']), key="sankey_behaviors")
+            with st.spinner("Applying Filters..."):
 
-            # Process selections
-            all_selected_context = []
-            for key in selected_contexts:
-                values = filters['poverty_contexts'][key]
-                all_selected_context.extend(values)
+                filter_selection_fragment()
 
-            all_selected_study_types = []
-            for value in selected_study_types['checked']:
-                value_list = (list(value.split(' > ')))
-                if len(value_list) < 3:
-                    continue
-                else: 
-                    all_selected_study_types.append(value_list[2])
-
-            all_selected_mechanisms = []
-            for value in selected_mechanisms['checked']:
-                value_list = (list(value.split(' > ')))
-                if len(value_list) < 2:
-                    continue
-                else: 
-                    all_selected_mechanisms.append(value_list[1])
-
-            all_selected_behaviors = []
-            for value in selected_behaviors['checked']:
-                value_list = (list(value.split(' > ')))
-                if len(value_list) < 2:
-                    continue
-                else: 
-                    all_selected_behaviors.append(value_list[1])
+                filters = st.session_state.get('filters', {})
+                selected_contexts = st.session_state.get('selected_contexts', [])
+                all_selected_context = st.session_state.get('all_selected_context', [])
+                all_selected_study_types = st.session_state.get('all_selected_study_types', [])
+                all_selected_mechanisms = st.session_state.get('all_selected_mechanisms', [])
+                all_selected_behaviors = st.session_state.get('all_selected_behaviors', [])
+                
+                # Get exploded data (cached based on sankey filters)
+                working_df_exploded = get_working_df_exploded_cached(
+                    st.session_state.ui_state['selected_country'],
+                    st.session_state.ui_state['selected_institution'],
+                    tuple(all_selected_context),
+                    tuple(all_selected_study_types),
+                    tuple(all_selected_mechanisms),
+                    tuple(all_selected_behaviors)
+                )
 
         # In col2, use working_df_viz for the Sankey
         with col2:
+            # Access the filter values from session state (set by the fragment)
+            filters = st.session_state.get('filters', {})
+            selected_contexts = st.session_state.get('selected_contexts', [])
+            all_selected_context = st.session_state.get('all_selected_context', [])
+            all_selected_study_types = st.session_state.get('all_selected_study_types', [])
+            all_selected_mechanisms = st.session_state.get('all_selected_mechanisms', [])
+            all_selected_behaviors = st.session_state.get('all_selected_behaviors', [])
+            
             # Get exploded data (cached based on sankey filters)
             working_df_exploded = get_working_df_exploded_cached(
                 st.session_state.ui_state['selected_country'],
@@ -865,26 +1019,27 @@ def main():
                 else:
                     st.write("No data available for selected filters.")
 
-        # IMPORTANT: Calculate filter signature BEFORE the Research Landscape section
-        # This prevents the visualization from recalculating when only paper selection changes
-        current_filter_signature = f"{st.session_state.ui_state['selected_country']}_{st.session_state.ui_state['selected_institution']}_{tuple(all_selected_context)}_{tuple(all_selected_study_types)}_{tuple(all_selected_mechanisms)}_{tuple(all_selected_behaviors)}"
-        
-        # Only recompute visualization data when filters actually change
-        if ('current_filter_signature' not in st.session_state.ui_state or 
-            st.session_state.ui_state['current_filter_signature'] != current_filter_signature):
+            # IMPORTANT: Calculate filter signature BEFORE the Research Landscape section
+            # This prevents the visualization from recalculating when only paper selection changes
+            current_filter_signature = f"{st.session_state.ui_state['selected_country']}_{st.session_state.ui_state['selected_institution']}_{tuple(all_selected_context)}_{tuple(all_selected_study_types)}_{tuple(all_selected_mechanisms)}_{tuple(all_selected_behaviors)}"
             
-            # Store new signature
-            st.session_state.ui_state['current_filter_signature'] = current_filter_signature
-            
-            # Get UMAP data and filter it (only when filters change)
-            umap_data = get_umap_data()
-            plot_df = umap_data[umap_data['doi'].isin(working_df_exploded['doi'].tolist())]
-            topics_df = load_topics()
-            
-            # Cache the visualization data
-            st.session_state.ui_state['cached_plot_df'] = plot_df
-            st.session_state.ui_state['cached_topics_df'] = topics_df
-            st.session_state.ui_state['current_papers_list'] = plot_df['title'].tolist() if not plot_df.empty else []
+            # Only recompute visualization data when filters actually change
+            if ('current_filter_signature' not in st.session_state.ui_state or 
+                st.session_state.ui_state['current_filter_signature'] != current_filter_signature):
+                
+                # Store new signature
+                st.session_state.ui_state['current_filter_signature'] = current_filter_signature
+                
+                # Get UMAP data and filter it (only when filters change)
+                umap_data = get_umap_data()
+                plot_df = umap_data[umap_data['doi'].isin(working_df_exploded['doi'].tolist())]
+                topics_df = load_topics()
+                
+                # Cache the visualization data
+                st.session_state.ui_state['cached_plot_df'] = plot_df
+                st.session_state.ui_state['cached_topics_df'] = topics_df
+                st.session_state.ui_state['current_papers_list'] = plot_df['title'].tolist() if not plot_df.empty else []
+          
 
         st.markdown("#### Research Landscape")
 
