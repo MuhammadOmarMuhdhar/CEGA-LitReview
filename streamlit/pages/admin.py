@@ -12,6 +12,24 @@ from streamlit_gsheets import GSheetsConnection
 from data.bigQuery import Client
 import json
 import time
+import psutil
+
+def monitor_and_clear_cache():
+    """Monitor memory usage and clear cache if needed"""
+    try:
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / 1024 / 1024
+        
+        # Clear cache if memory usage exceeds 2GB
+        if memory_mb > 1024:
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            return True
+        return False
+    except Exception:
+        return False
+        
+monitor_and_clear_cache()
 
 # Function to load environment variables with Streamlit compatibility
 def load_environment_variables():
@@ -289,73 +307,90 @@ if 'connection_tested' not in st.session_state:
     st.session_state.connection_tested = True
     st.session_state.last_health_check = time.time()
 
-# Automatic connection health display in sidebar
+
+# System Monitor Section - Clean Version with Metrics
 with st.sidebar:
-    st.markdown("**Database Status**")
+    st.markdown("### System Status")
     
-    # Connection Health Monitor - Prevents idle timeout crashes
-    # This automatically tests the BigQuery connection every 30 seconds and refreshes
-    # stale connections before they cause errors. Helps diagnose connection issues.
+    # Memory Usage
+    try:
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / 1024 / 1024
+        
+        if memory_mb < 1024:
+            st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="Healthy")
+        else:
+            st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="High", delta_color="inverse")
+            
+    except ImportError:
+        st.metric("Memory Usage", "N/A", delta="Install psutil")
+
+    # Database Status
     current_time = time.time()
-    if ('last_health_check' not in st.session_state or 
+    if ('last_health_check' not in st.session_state or
         current_time - st.session_state.last_health_check > 30):
         
         try:
             client = get_healthy_bigquery_client()
             is_healthy = client._is_client_healthy()
-            st.session_state.db_status = "Healthy" if is_healthy else "Reconnecting..."
+            st.session_state.db_status = "Connected" if is_healthy else "Reconnecting"
             st.session_state.last_health_check = current_time
-        except Exception as e:
+        except Exception:
             st.session_state.db_status = "Error"
-            # Debug: Uncomment line below to see detailed error info
-            # st.error(f"Connection error: {str(e)}")
-            
-    # Display the cached status
-    status = st.session_state.get('db_status', 'Checking...')
-    if status == "Healthy":
-        st.success(f"🟢 {status}")
-    elif status == "Reconnecting...":
-        st.warning(f"🟡 {status}")
+    
+    status = st.session_state.get('db_status', 'Checking')
+    
+    if status == "Connected":
+        st.metric("Database", status, delta="Active")
+    elif status == "Error":
+        st.metric("Database", status, delta="Failed", delta_color="inverse")
     else:
-        st.error(f"🔴 {status}")
+        st.metric("Database", status, delta="Working", delta_color="off")
     
-    # Show last check time
-    if 'last_health_check' in st.session_state:
-        last_check = datetime.fromtimestamp(st.session_state.last_health_check)
-        st.caption(f"Last checked: {last_check.strftime('%H:%M:%S')}")
+    # Quick Actions
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Clear Cache"):
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.success("Cache cleared")
     
-    # Debug Information (expandable section for troubleshooting)
-    with st.expander("🔧 Debug Info", expanded=False):
+    with col2:
+        if st.button("Test DB"):
+            try:
+                client = get_healthy_bigquery_client()
+                client.execute_query("SELECT 1")
+                st.success("DB OK")
+            except Exception:
+                st.error("DB Failed")
+    
+    # Technical Details Expander
+    with st.expander("Technical Details"):
         st.markdown("""
+        **Memory Monitor:**
+        - Tracks RAM usage to prevent crashes
+        - "High" warning appears above 1GB usage
+        
+        **Database Monitor:**
+        - Tests BigQuery connection every 30 seconds
+        
         **Status Meanings:**
-        - 🟢 **Healthy**: Connection active, queries working
-        - 🟡 **Reconnecting**: Stale connection detected, refreshing automatically  
-        - 🔴 **Error**: Connection failed, check credentials/network
+        - **Connected**: Active connection, queries working normally
+        - **Reconnecting**: Stale connection detected, refreshing automatically
+        - **Error**: Connection failed, check credentials or network
         
         **Troubleshooting:**
-        - If stuck on "Reconnecting": Check BigQuery quotas/permissions
-        - If showing "Error": Verify service account credentials
+        - If memory stays high: Click "Clear Cache" or refresh page
+        - If database shows "Error": Check BigQuery quotas and permissions
         - If frequent reconnects: May indicate network instability
-        - Check browser console for detailed error messages
+        - Use "Test DB" button to manually verify connection
         """)
         
-        # Show additional debug info
+        # Show last check time
         if 'last_health_check' in st.session_state:
-            time_since_check = current_time - st.session_state.last_health_check
-            st.caption(f"Seconds since last check: {int(time_since_check)}")
-        
-        # Connection test button for manual debugging
-        if st.button("🔍 Test Connection Now", key="manual_health_check"):
-            try:
-                with st.spinner("Testing connection..."):
-                    client = get_healthy_bigquery_client()
-                    test_result = client.execute_query("SELECT 1 as test")
-                    if not test_result.empty:
-                        st.success("✅ Manual connection test passed")
-                    else:
-                        st.error("❌ Query returned empty result")
-            except Exception as e:
-                st.error(f"❌ Manual test failed: {str(e)}")
+            last_check = datetime.fromtimestamp(st.session_state.last_health_check)
+            st.caption(f"Last database check: {last_check.strftime('%H:%M:%S')}")
+    
 
 # Main content
 tab1, tab3, tab4 = st.tabs(["Update Database", "Edit Database", "Logs"])
