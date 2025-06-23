@@ -7,12 +7,29 @@ from streamlit_tree_select import tree_select
 from dotenv import load_dotenv
 import ast
 import json
+import psutil 
+import time
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(parent_dir)
 from visuals import bar, sankey, heatMap
 from data.bigQuery import Client
 
 st.set_page_config(page_title="Workspace", layout="wide", initial_sidebar_state='collapsed')
+
+def monitor_and_clear_cache():
+    """Monitor memory usage and clear cache if needed"""
+    try:
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / 1024 / 1024
+        
+        # Clear cache if memory usage exceeds 2GB
+        if memory_mb > 1024:
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            return True
+        return False
+    except Exception:
+        return False
 
 @st.cache_data
 def load_filters_json():
@@ -349,7 +366,7 @@ def get_working_df_exploded_cached(country, institution, contexts, study_types, 
         behaviors
     )
 
-@st.cache_data(show_spinner="Loading main papers data...")
+@st.cache_data(show_spinner="Connecting to database...")
 def get_papers_data():
     return load_country_institution_data()
 
@@ -362,7 +379,7 @@ def get_preprocessed_papers():
 def get_labels_data():
     return load_label_data()
 
-@st.cache_data(show_spinner="Loading UMAP...")
+@st.cache_data(show_spinner="Loading heatmap data...")
 def get_umap_data():
     return load_umap()
 
@@ -470,7 +487,7 @@ def paper_details_fragment():
 
 def main():  
 
-    import time
+    monitor_and_clear_cache()
 
     try: 
         if 'connection_tested' not in st.session_state:

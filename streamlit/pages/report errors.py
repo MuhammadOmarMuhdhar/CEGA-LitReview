@@ -1,7 +1,25 @@
 import streamlit as st
 from datetime import datetime
 
+def monitor_and_clear_cache():
+    """Monitor memory usage and clear cache if needed"""
+    try:
+        process = psutil.Process()
+        memory_mb = process.memory_info().rss / 1024 / 1024
+        
+        # Clear cache if memory usage exceeds 2GB
+        if memory_mb > 1024:
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            return True
+        return False
+    except Exception:
+        return False
+    
+
 def main():
+    monitor_and_clear_cache()
+    
     st.title("Report Errors")
     
     # Simple form for reporting any type of error

@@ -7,6 +7,9 @@ import logging
 import json
 from datetime import datetime, date
 import re
+import gc
+import weakref
+from contextlib import contextmanager
 
 # Configure logging
 logging.basicConfig(
@@ -17,11 +20,7 @@ logging.basicConfig(
 class Client:
     def __init__(self, credentials_json, project_id):
         """
-        Initialize the BigQuery API
-        
-        Parameters:
-        credentials_json (dict): Service account credentials as dictionary
-        project_id (str): Google Cloud Project ID
+        Initialize the BigQuery API with memory management
         """
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("Initializing BigQuery API")
@@ -29,8 +28,10 @@ class Client:
         self.credentials_json = credentials_json
         self.project_id = project_id
         self.client = self._build_client()
-        # Set batch size for BigQuery operations
-        self.batch_size = 10000  # BigQuery can handle larger batches than Sheets
+        self.batch_size = 10000
+        
+        # Track active jobs for cleanup - USE WEAKREFS TO PREVENT REFERENCE CYCLES
+        self._active_jobs = weakref.WeakSet()
         
         self.logger.info(f"BigQuery API initialized with batch size: {self.batch_size}")
     
@@ -47,14 +48,60 @@ class Client:
         self.logger.info("BigQuery client built successfully")
         return client
     
+    @contextmanager
+    def _managed_query_job(self, query, job_config=None):
+        """Context manager for query jobs with automatic cleanup"""
+        job = None
+        try:
+            job = self.client.query(query, job_config=job_config)
+            self._active_jobs.add(job)  # Track with weak reference
+            yield job
+        finally:
+            # EXPLICIT CLEANUP
+            if job:
+                try:
+                    # Cancel job if still running
+                    if hasattr(job, 'cancel') and job.state in ['PENDING', 'RUNNING']:
+                        job.cancel()
+                except Exception:
+                    pass
+                
+                # Clear job reference
+                job = None
+            
+            # Force garbage collection
+            gc.collect()
+    
+    def _cleanup_jobs(self):
+        """Manually cleanup any remaining job references"""
+        try:
+            # WeakSet automatically removes dead references
+            active_count = len(self._active_jobs)
+            if active_count > 0:
+                self.logger.warning(f"Found {active_count} active jobs during cleanup")
+            
+            # Force garbage collection
+            gc.collect()
+            
+        except Exception as e:
+            self.logger.warning(f"Error during job cleanup: {e}")
+    
+    def __del__(self):
+        """Cleanup on destruction"""
+        try:
+            self._cleanup_jobs()
+            if hasattr(self, 'client'):
+                self.client.close()
+        except Exception:
+            pass
+    
     def _is_client_healthy(self):
         """Check if the BigQuery client connection is still healthy"""
         try:
-            # Simple query to test connection - should complete in <1 second
             test_query = "SELECT 1 as test_connection"
-            query_job = self.client.query(test_query)
-            query_job.result(timeout=5)  # 5 second timeout
-            return True
+            with self._managed_query_job(test_query) as job:
+                job.result(timeout=5)
+                return True
         except Exception as e:
             self.logger.warning(f"Client health check failed: {e}")
             return False
@@ -62,6 +109,18 @@ class Client:
     def _refresh_client(self):
         """Rebuild the BigQuery client with fresh credentials"""
         self.logger.info("Refreshing BigQuery client connection")
+        
+        # CLEANUP OLD CLIENT
+        try:
+            if hasattr(self, 'client') and self.client:
+                self.client.close()
+        except Exception:
+            pass
+        
+        # Cleanup any remaining jobs
+        self._cleanup_jobs()
+        
+        # Build new client
         self.client = self._build_client()
         return self.client
 
@@ -72,16 +131,154 @@ class Client:
             self._refresh_client()
         return self.client
     
+    def execute_query(self, query, use_storage_api=True):
+        """Execute query with proper memory management"""
+        try:
+            # Ensure we have a healthy client
+            client = self.get_healthy_client()
+            
+            job_config = bigquery.QueryJobConfig(use_query_cache=True)
+            
+            # Use context manager for automatic cleanup
+            with self._managed_query_job(query, job_config) as query_job:
+                
+                if use_storage_api:
+                    try:
+                        df = query_job.to_dataframe(create_bqstorage_client=True)
+                    except Exception as e:
+                        self.logger.warning(f"Storage API failed, using standard API: {e}")
+                        df = query_job.to_dataframe()
+                else:
+                    df = query_job.to_dataframe()
+                
+                # IMPORTANT: Make a copy to break references to the job
+                df_copy = df.copy()
+                
+                # Clear original dataframe reference
+                del df
+                
+                return df_copy
+                
+        except Exception as e:
+            self.logger.error(f"Error executing query: {str(e)}")
+            raise
+        finally:
+            # Force cleanup
+            gc.collect()
+    
+    def read(self, dataset_id, table_id, query=None, limit=None, use_db_dtypes=True):
+        """
+        Reads data with proper memory management
+        """
+        self.logger.info(f"Starting read operation - Dataset: {dataset_id}, Table: {table_id}")
+        
+        try:
+            if query:
+                sql_query = query
+                self.logger.info("Using custom query")
+            else:
+                sql_query = f"""
+                SELECT *
+                FROM `{self.project_id}.{dataset_id}.{table_id}`
+                """
+                
+                if limit:
+                    sql_query += f" LIMIT {limit}"
+            
+            self.logger.info(f"Executing query: {sql_query}")
+            
+            # Use context manager for automatic cleanup
+            with self._managed_query_job(sql_query) as query_job:
+                
+                try:
+                    if use_db_dtypes:
+                        df = query_job.to_dataframe()
+                    else:
+                        raise ValueError("Skipping db-dtypes")
+                except (ValueError, ImportError) as e:
+                    if "db-dtypes" in str(e) or not use_db_dtypes:
+                        self.logger.warning("db-dtypes package not available, using alternative method")
+                        
+                        # MEMORY-EFFICIENT ROW PROCESSING
+                        results = query_job.result()
+                        
+                        # Process in chunks to avoid memory buildup
+                        chunk_size = 10000
+                        all_chunks = []
+                        
+                        current_chunk = []
+                        for i, row in enumerate(results):
+                            row_dict = {}
+                            for key, value in row.items():
+                                if hasattr(value, 'isoformat'):
+                                    row_dict[key] = value.isoformat()
+                                else:
+                                    row_dict[key] = value
+                            current_chunk.append(row_dict)
+                            
+                            # Process in chunks
+                            if len(current_chunk) >= chunk_size:
+                                all_chunks.append(pd.DataFrame(current_chunk))
+                                current_chunk = []
+                                
+                                # Periodic garbage collection
+                                if len(all_chunks) % 10 == 0:
+                                    gc.collect()
+                        
+                        # Add remaining rows
+                        if current_chunk:
+                            all_chunks.append(pd.DataFrame(current_chunk))
+                        
+                        # Combine chunks efficiently
+                        if all_chunks:
+                            df = pd.concat(all_chunks, ignore_index=True)
+                            # Clear chunk references
+                            del all_chunks
+                        else:
+                            df = pd.DataFrame()
+                    else:
+                        raise e
+                
+                # Make a copy to break job references
+                df_copy = df.copy()
+                del df
+                
+                self.logger.info(f"Read operation completed - DataFrame shape: {df_copy.shape}")
+                return df_copy
+                
+        except Exception as e:
+            self.logger.error(f"Error reading data: {str(e)}")
+            raise
+        finally:
+            gc.collect()
+    
+    def read_fast(self, dataset_id, table_id, query=None):
+        """Fast read with memory management"""
+        try:
+            if query:
+                sql_query = query
+            else:
+                sql_query = f"SELECT * FROM `{self.project_id}.{dataset_id}.{table_id}`"
+            
+            with self._managed_query_job(sql_query) as job:
+                try:
+                    df = job.to_dataframe(create_bqstorage_client=True)
+                except Exception as e:
+                    self.logger.warning(f"Storage API failed, using standard API: {e}")
+                    df = job.to_dataframe()
+                
+                # Return copy to break job references
+                return df.copy()
+                
+        except Exception as e:
+            self.logger.error(f"Error in fast read: {str(e)}")
+            raise
+        finally:
+            gc.collect()
+    
+    # Rest of your methods with similar patterns...
     def _sanitize_cell_value(self, value):
-        """
-        Comprehensive sanitization of individual cell values for BigQuery
-        
-        Parameters:
-        value: Any value from a DataFrame cell
-        
-        Returns:
-        A value suitable for BigQuery
-        """
+        """Comprehensive sanitization of individual cell values for BigQuery"""
         # Handle None/NaN/null values
         if value is None or pd.isna(value):
             return None
@@ -157,353 +354,3 @@ class Client:
         except Exception as e:
             self.logger.warning(f"Failed to convert value {type(value)} to string: {e}")
             return None
-    
-    def _sanitize_column_name(self, col_name):
-        """
-        Sanitize column names for BigQuery compatibility
-        
-        Parameters:
-        col_name: Original column name
-        
-        Returns:
-        BigQuery-compatible column name
-        """
-        # Convert to string
-        clean_name = str(col_name)
-        
-        # BigQuery column names must start with letter or underscore
-        if not clean_name[0].isalpha() and clean_name[0] != '_':
-            clean_name = '_' + clean_name
-        
-        # Replace invalid characters with underscores
-        clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', clean_name)
-        
-        # Remove consecutive underscores
-        clean_name = re.sub(r'_{2,}', '_', clean_name)
-        
-        # Remove trailing underscores
-        clean_name = clean_name.rstrip('_')
-        
-        # Ensure it's not empty
-        if not clean_name:
-            clean_name = 'column_'
-        
-        # BigQuery has a 300 character limit for column names
-        if len(clean_name) > 300:
-            clean_name = clean_name[:297] + "___"
-        
-        return clean_name
-    
-    def _validate_and_clean_dataframe(self, df):
-        """
-        Comprehensive DataFrame validation and cleaning for BigQuery
-        
-        Parameters:
-        df: pandas DataFrame to clean
-        
-        Returns:
-        Cleaned pandas DataFrame
-        """
-        self.logger.info(f"Starting DataFrame validation and cleaning - Shape: {df.shape}")
-        
-        df_clean = df.copy()
-        
-        # Clean column names for BigQuery compatibility
-        original_columns = df_clean.columns.tolist()
-        clean_columns = [self._sanitize_column_name(col) for col in original_columns]
-        
-        # Handle duplicate column names
-        seen_columns = {}
-        final_columns = []
-        for col in clean_columns:
-            if col in seen_columns:
-                seen_columns[col] += 1
-                final_columns.append(f"{col}_{seen_columns[col]}")
-            else:
-                seen_columns[col] = 0
-                final_columns.append(col)
-        
-        df_clean.columns = final_columns
-        
-        if final_columns != original_columns:
-            self.logger.info("Cleaned column names for BigQuery compatibility")
-        
-        # Apply sanitization to all values
-        for col in df_clean.columns:
-            df_clean[col] = df_clean[col].apply(self._sanitize_cell_value)
-        
-        # Log data quality info
-        nan_counts = df_clean.isnull().sum()
-        total_nans = nan_counts.sum()
-        
-        if total_nans > 0:
-            self.logger.info(f"Found {total_nans} null values across {(nan_counts > 0).sum()} columns")
-        
-        self.logger.info("DataFrame validation completed")
-        return df_clean
-    
-    def _get_table_reference(self, dataset_id, table_id):
-        """Get BigQuery table reference"""
-        return self.client.dataset(dataset_id).table(table_id)
-    
-    def _create_dataset_if_not_exists(self, dataset_id):
-        """Create dataset if it doesn't exist"""
-        try:
-            self.client.get_dataset(dataset_id)
-            self.logger.info(f"Dataset {dataset_id} already exists")
-        except Exception:
-            self.logger.info(f"Creating dataset {dataset_id}")
-            dataset = bigquery.Dataset(f"{self.project_id}.{dataset_id}")
-            dataset.location = "US"  # You can change this based on your needs
-            self.client.create_dataset(dataset, timeout=30)
-            self.logger.info(f"Dataset {dataset_id} created successfully")
-    
-    def append(self, df, dataset_id, table_id, create_dataset=True):
-        """
-        Appends pandas DataFrame data to a BigQuery table
-        
-        Parameters:
-        df (pandas.DataFrame): DataFrame to append to the table
-        dataset_id (str): BigQuery dataset ID
-        table_id (str): BigQuery table ID
-        create_dataset (bool): Whether to create dataset if it doesn't exist
-        
-        Returns:
-        google.cloud.bigquery.job.LoadJob: The completed load job
-        """
-        self.logger.info(f"Starting append operation - Dataset: {dataset_id}, Table: {table_id}")
-        
-        try:
-            # Create dataset if needed
-            if create_dataset:
-                self._create_dataset_if_not_exists(dataset_id)
-            
-            # Clean the DataFrame
-            df_clean = self._validate_and_clean_dataframe(df)
-            
-            # Get table reference
-            table_ref = self._get_table_reference(dataset_id, table_id)
-            
-            # Configure the load job
-            job_config = bigquery.LoadJobConfig(
-                write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-                create_disposition=bigquery.CreateDisposition.CREATE_IF_NEEDED,
-                autodetect=True  # Auto-detect schema
-            )
-            
-            # Load data to BigQuery
-            self.logger.info(f"Loading {len(df_clean)} rows to BigQuery")
-            job = self.client.load_table_from_dataframe(
-                df_clean, 
-                table_ref, 
-                job_config=job_config
-            )
-            
-            # Wait for the job to complete
-            job.result()
-            
-            # Get the updated table info
-            table = self.client.get_table(table_ref)
-            self.logger.info(f"Append completed - Total rows in table: {table.num_rows}")
-            
-            return job
-            
-        except Exception as e:
-            self.logger.error(f"Error appending data: {str(e)}")
-            raise
-    
-    def replace(self, df, dataset_id, table_id, create_dataset=True):
-        """
-        Replaces all data in a BigQuery table
-        
-        Parameters:
-        df (pandas.DataFrame): DataFrame to write to the table
-        dataset_id (str): BigQuery dataset ID
-        table_id (str): BigQuery table ID
-        create_dataset (bool): Whether to create dataset if it doesn't exist
-        
-        Returns:
-        google.cloud.bigquery.job.LoadJob: The completed load job
-        """
-        self.logger.info(f"Starting replace operation - Dataset: {dataset_id}, Table: {table_id}")
-        
-        try:
-            # Create dataset if needed
-            if create_dataset:
-                self._create_dataset_if_not_exists(dataset_id)
-            
-            # Clean the DataFrame
-            df_clean = self._validate_and_clean_dataframe(df)
-            
-            # Get table reference
-            table_ref = self._get_table_reference(dataset_id, table_id)
-            
-            # Configure the load job to truncate (replace) existing data
-            job_config = bigquery.LoadJobConfig(
-                write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-                create_disposition=bigquery.CreateDisposition.CREATE_IF_NEEDED,
-                autodetect=True  # Auto-detect schema
-            )
-            
-            # Load data to BigQuery
-            self.logger.info(f"Replacing table with {len(df_clean)} rows")
-            job = self.client.load_table_from_dataframe(
-                df_clean, 
-                table_ref, 
-                job_config=job_config
-            )
-            
-            # Wait for the job to complete
-            job.result()
-            
-            # Get the updated table info
-            table = self.client.get_table(table_ref)
-            self.logger.info(f"Replace completed - Total rows in table: {table.num_rows}")
-            
-            return job
-            
-        except Exception as e:
-            self.logger.error(f"Error replacing data: {str(e)}")
-            raise
-    
-    def read(self, dataset_id, table_id, query=None, limit=None, use_db_dtypes=True):
-        """
-        Reads data from a BigQuery table and returns a pandas DataFrame
-        
-        Parameters:
-        dataset_id (str): BigQuery dataset ID
-        table_id (str): BigQuery table ID
-        query (str, optional): Custom SQL query. If provided, dataset_id and table_id are ignored
-        limit (int, optional): Maximum number of rows to return
-        use_db_dtypes (bool): Whether to use db-dtypes package for type conversion
-        
-        Returns:
-        pandas.DataFrame: DataFrame with the table data
-        """
-        self.logger.info(f"Starting read operation - Dataset: {dataset_id}, Table: {table_id}")
-        
-        try:
-            if query:
-                # Use custom query
-                sql_query = query
-                self.logger.info("Using custom query")
-            else:
-                # Build query from dataset and table
-                sql_query = f"""
-                SELECT *
-                FROM `{self.project_id}.{dataset_id}.{table_id}`
-                """
-                
-                if limit:
-                    sql_query += f" LIMIT {limit}"
-            
-            self.logger.info(f"Executing query: {sql_query}")
-            
-            # Execute query
-            query_job = self.client.query(sql_query)
-            
-            try:
-                # Try to use to_dataframe() with db-dtypes
-                if use_db_dtypes:
-                    df = query_job.to_dataframe()
-                else:
-                    raise ValueError("Skipping db-dtypes")
-            except (ValueError, ImportError) as e:
-                if "db-dtypes" in str(e) or not use_db_dtypes:
-                    self.logger.warning("db-dtypes package not available, using alternative method")
-                    # Alternative: Convert to list of dictionaries first, then to DataFrame
-                    results = query_job.result()
-                    rows = []
-                    for row in results:
-                        # Convert Row to dictionary, handling special types
-                        row_dict = {}
-                        for key, value in row.items():
-                            # Convert datetime objects to strings if needed
-                            if hasattr(value, 'isoformat'):
-                                row_dict[key] = value.isoformat()
-                            else:
-                                row_dict[key] = value
-                        rows.append(row_dict)
-                    
-                    df = pd.DataFrame(rows)
-                else:
-                    raise e
-            
-            self.logger.info(f"Read operation completed - DataFrame shape: {df.shape}")
-            return df
-            
-        except Exception as e:
-            self.logger.error(f"Error reading data: {str(e)}")
-            raise
-    
-    def execute_query(self, query, use_storage_api=True):
-        """Execute query with connection health check"""
-        try:
-            # Ensure we have a healthy client
-            client = self.get_healthy_client()
-            
-            job_config = bigquery.QueryJobConfig(use_query_cache=True)
-            query_job = client.query(query, job_config=job_config)
-            
-            if use_storage_api:
-                try:
-                    df = query_job.to_dataframe(create_bqstorage_client=True)
-                except Exception as e:
-                    self.logger.warning(f"Storage API failed, using standard API: {e}")
-                    df = query_job.to_dataframe()
-            else:
-                df = query_job.to_dataframe()
-                
-            return df
-        except Exception as e:
-            self.logger.error(f"Error executing query: {str(e)}")
-            raise
-    
-    def list_tables(self, dataset_id):
-        """
-        List all tables in a dataset
-        
-        Parameters:
-        dataset_id (str): BigQuery dataset ID
-        
-        Returns:
-        list: List of table IDs
-        """
-        try:
-            dataset_ref = self.client.dataset(dataset_id)
-            tables = list(self.client.list_tables(dataset_ref))
-            table_ids = [table.table_id for table in tables]
-            
-            self.logger.info(f"Found {len(table_ids)} tables in dataset {dataset_id}")
-            return table_ids
-            
-        except Exception as e:
-            self.logger.error(f"Error listing tables: {str(e)}")
-            raise
-
-    def read_fast(self, dataset_id, table_id, query=None):
-        """
-        Fast read using BigQuery Storage API only
-        
-        Parameters:
-        dataset_id (str): BigQuery dataset ID
-        table_id (str): BigQuery table ID  
-        query (str, optional): Custom SQL query
-        
-        Returns:
-        pandas.DataFrame: DataFrame with the table data
-        """
-        try:
-            if query:
-                sql_query = query
-            else:
-                sql_query = f"SELECT * FROM `{self.project_id}.{dataset_id}.{table_id}`"
-            
-            job = self.client.query(sql_query)
-            return job.to_dataframe(create_bqstorage_client=True)
-            
-        except Exception as e:
-            # Fallback to standard API if Storage API fails
-            self.logger.warning(f"Storage API failed, using standard API: {e}")
-            job = self.client.query(sql_query)
-            return job.to_dataframe()
