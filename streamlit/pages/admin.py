@@ -21,7 +21,7 @@ def monitor_and_clear_cache():
         memory_mb = process.memory_info().rss / 1024 / 1024
         
         # Clear cache if memory usage exceeds 2GB
-        if memory_mb > 1024:
+        if memory_mb > 2048:
             st.cache_data.clear()
             st.cache_resource.clear()
             return True
@@ -183,7 +183,6 @@ def initialize_pipeline():
         project_id= 'literature-452020',
     )
 
-data_pipeline = initialize_pipeline()
 
 @st.dialog("Confirm Deletion")
 def confirm_delete_dialog(paper_title, papers_df, client, key):
@@ -260,7 +259,7 @@ def display_paper_details(papers_df, key=None, show_delete=False, client=None):
         st.markdown(f"**Abstract:** {selected_paper_details['abstract'].values[0]}")
 
 # UPDATED: Cache BigQuery client with health check capability
-@st.cache_resource
+@st.cache_resource(show_spinner='Connecting to database...')
 def get_bigquery_client():
     try:
         client = Client(credentials, 'literature-452020')
@@ -317,7 +316,7 @@ with st.sidebar:
         process = psutil.Process()
         memory_mb = process.memory_info().rss / 1024 / 1024
         
-        if memory_mb < 1024:
+        if memory_mb < 1500:
             st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="Healthy")
         else:
             st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="High", delta_color="inverse")
@@ -328,7 +327,7 @@ with st.sidebar:
     # Database Status
     current_time = time.time()
     if ('last_health_check' not in st.session_state or
-        current_time - st.session_state.last_health_check > 30):
+        current_time - st.session_state.last_health_check > 300):
         
         try:
             client = get_healthy_bigquery_client()
@@ -413,16 +412,14 @@ with tab1:
             st.session_state.data_fetched = False
 
         if st.button("Fetch Data From API", type="primary"):
-            # Show warning only during active fetching
             warning_placeholder = st.empty()
             
             if not st.session_state.data_fetched:
                 warning_placeholder.warning("While fetching data, please do not close the tab or refresh the page.")
                 
                 try:
-                    papers = data_pipeline.run(
-                        start_date,
-                        end_date)
+                    data_pipeline = initialize_pipeline()
+                    papers = data_pipeline.run(start_date, end_date)
                     st.session_state.papers = papers
                     st.session_state.data_fetched = True
                 except Exception as e:

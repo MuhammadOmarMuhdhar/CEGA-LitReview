@@ -23,7 +23,7 @@ def monitor_and_clear_cache():
         memory_mb = process.memory_info().rss / 1024 / 1024
         
         # Clear cache if memory usage exceeds 2GB
-        if memory_mb > 1024:
+        if memory_mb > 2048:
             st.cache_data.clear()
             st.cache_resource.clear()
             return True
@@ -31,7 +31,6 @@ def monitor_and_clear_cache():
     except Exception:
         return False
 
-@st.cache_data
 def load_filters_json():
     """Load filters JSON once and cache it"""
     with open('data/trainingData/labels.json', 'r') as f:
@@ -260,7 +259,7 @@ st.sidebar.markdown("""
                         unsafe_allow_html=True,
 )
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Connecting to Database...")
 def get_bigquery_client():
     try:
         client = Client(credentials, 'literature-452020')
@@ -493,8 +492,6 @@ def main():
         if 'connection_tested' not in st.session_state:
             client = get_healthy_bigquery_client()
             st.session_state.connection_tested = True
-            st.session_state.last_health_check = time.time()
-
     except Exception as e:
         st.error("Database connection failed. Please refresh the page.")
         st.stop()
