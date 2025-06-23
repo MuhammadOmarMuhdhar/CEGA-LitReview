@@ -71,7 +71,7 @@ class Sankey:
         return lambda x: mapper(x, detail_level)
     
     def _preprocess_dataframe(self, df: pd.DataFrame, columns_to_show: List[str]) -> pd.DataFrame:
-        """One-time preprocessing with aggressive caching."""
+        """One-time preprocessing with aggressive caching - FIXED for categoricals"""
         df_info = (df.shape, tuple(df.columns), tuple(columns_to_show))
         current_hash = self._create_stable_hash(df_info)
         
@@ -102,21 +102,30 @@ class Sankey:
             )
             mask &= col_mask
             
-            # Pre-compute and cache value counts
+            # FIXED: Handle categorical columns for value counting
             if col in ['poverty_context', 'mechanism', 'study_type']:
-                value_counts = result_df[col].value_counts()
+                # Convert categorical to string temporarily for value_counts
+                if result_df[col].dtype.name == 'category':
+                    col_series = result_df[col].astype(str)
+                else:
+                    col_series = result_df[col]
+                    
+                value_counts = col_series.value_counts()
                 self._value_counts_cache[col] = value_counts
-                mask &= result_df[col].map(value_counts) > 2
+                
+                # Apply the > 2 filter using string comparison
+                mask &= col_series.map(value_counts) > 2
             
-            # Cache unique values
-            self._unique_values_cache[col] = result_df[col].unique()
+            # Cache unique values - handle categoricals
+            if result_df[col].dtype.name == 'category':
+                self._unique_values_cache[col] = result_df[col].cat.categories.tolist()
+            else:
+                self._unique_values_cache[col] = result_df[col].unique()
         
         result_df = result_df[mask]
         
-        # Convert categorical columns for better memory usage
-        for col in existing_columns:
-            if result_df[col].dtype == 'object':
-                result_df[col] = result_df[col].astype('category')
+        # Keep categorical columns as categorical (don't convert back to object)
+        # This preserves the memory benefits
         
         self._preprocessed_data = result_df
         self._preprocessed_hash = current_hash
@@ -341,7 +350,7 @@ class Sankey:
         return f'rgba(128,128,128,{alpha})'
     
     def _create_node_structure(self, df_display, columns_to_show, use_display_columns=True):
-        """Optimized node structure creation with caching."""
+        """Optimized node structure creation with caching - FIXED for categoricals"""
         cache_key = self._create_stable_hash(
             df_display.shape, tuple(columns_to_show), use_display_columns
         )
@@ -356,14 +365,15 @@ class Sankey:
             else:
                 column_mappings[col_name] = col_name
         
-        # Efficient unique value extraction
+        # Efficient unique value extraction - FIXED for categoricals
         categories = {}
         for col_name in columns_to_show:
             mapped_col = column_mappings[col_name]
             if mapped_col in df_display.columns:
-                # Use pandas categorical if available for faster unique()
+                # FIXED: Handle categorical columns properly
                 if df_display[mapped_col].dtype.name == 'category':
-                    categories[col_name] = df_display[mapped_col].cat.categories.tolist()
+                    # For categorical, get unique values from the actual data, not all categories
+                    categories[col_name] = df_display[mapped_col].dropna().unique().tolist()
                 else:
                     categories[col_name] = df_display[mapped_col].unique().tolist()
             else:
