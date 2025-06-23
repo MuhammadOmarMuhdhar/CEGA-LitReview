@@ -127,3 +127,4 @@ db-dtypes==1.4.3
 tiktoken==0.9.0
 pycountry==24.6.1
 google-cloud-bigquery-storage==2.32.0
+psutil==7.0.0
