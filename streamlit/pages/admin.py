@@ -260,7 +260,7 @@ def display_paper_details(papers_df, key=None, show_delete=False, client=None):
         st.markdown(f"**Abstract:** {selected_paper_details['abstract'].values[0]}")
 
 # UPDATED: Cache BigQuery client with health check capability
-@st.cache_resource
+@st.cache_resource(show_spinner='Connecting to database...')
 def get_bigquery_client():
     try:
         client = Client(credentials, 'literature-452020')
@@ -317,7 +317,7 @@ with st.sidebar:
         process = psutil.Process()
         memory_mb = process.memory_info().rss / 1024 / 1024
         
-        if memory_mb < 1024:
+        if memory_mb < 1500:
             st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="Healthy")
         else:
             st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="High", delta_color="inverse")
