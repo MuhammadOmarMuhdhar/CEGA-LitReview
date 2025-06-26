@@ -10,12 +10,34 @@ import json
 import psutil 
 import time
 import re
+import gc
+
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(parent_dir)
 from visuals import bar, sankey, heatMap
 from data.bigQuery import Client
 
 st.set_page_config(page_title="Workspace", layout="wide", initial_sidebar_state='collapsed')
+
+# Simplified memory logging - only the essentials
+def log_memory(step_name):
+    process = psutil.Process()
+    memory_mb = process.memory_info().rss / 1024 / 1024
+    print(f"[MEMORY] {step_name}: {memory_mb:.1f} MB")
+    return memory_mb
+
+# Log major filter changes
+def log_filter_change(filter_type, count):
+    print(f"[FILTER] {filter_type}: {count} selected")
+    log_memory(f"after_{filter_type}_change")
+
+# Log major data operations
+def log_data_op(operation, rows=None):
+    if rows:
+        print(f"[DATA] {operation}: {rows} rows")
+    else:
+        print(f"[DATA] {operation}")
+    log_memory(f"after_{operation}")
 
 def monitor_and_clear_cache():
     """Monitor memory usage and clear cache if needed"""
@@ -24,9 +46,12 @@ def monitor_and_clear_cache():
         memory_mb = process.memory_info().rss / 1024 / 1024
         
         # Clear cache if memory usage exceeds 1.5GB
-        if memory_mb > 1500:
+        if memory_mb > 900:
+            print(f"[CACHE] Clearing cache - memory at {memory_mb:.1f}MB")
             st.cache_data.clear()
             st.cache_resource.clear()
+            gc.collect()
+            log_memory("after_cache_clear")
             return True
         return False
     except Exception:
@@ -37,30 +62,37 @@ def load_filters_json():
     with open('data/trainingData/labels.json', 'r') as f:
         return json.load(f)
 
-@st.cache_data(ttl=3600, max_entries=2, show_spinner="Processing data...")
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Processing data...")  # Reduced from 300 to 300 seconds (kept same)
 def preprocess_papers_data(papers_df):
     """One-time expensive preprocessing with categorical optimization"""
+    log_data_op("preprocess_start", len(papers_df))
+    
     df = papers_df.copy()
     
     # Pre-parse institutions (convert lists to strings for caching)
     df['institutions_list'] = df['institution'].apply(
         lambda x: str(list(dict.fromkeys([i for i in ast.literal_eval(str(x)) if i is not None])))
     )
+    log_memory("after_institutions_parsing")
     
     # Pre-parse countries (convert lists to strings for caching)
     df['countries_list'] = df['country_of_study'].apply(
         lambda x: str([i.strip() for i in str(x).split(',') if i.strip() and i.strip().lower() != 'nan'])
     )
+    log_memory("after_countries_parsing")
     
     df['institutions_list'] = df['institutions_list'].astype('category')
     df['countries_list'] = df['countries_list'].astype('category')
+    log_memory("after_categorical_conversion")
     
     return df
 
-# Cache expensive data processing operations - NOW MUCH FASTER
-@st.cache_data(ttl=1800, max_entries=3, show_spinner="Loading Filters...")
+# Cache expensive data processing operations 
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Loading Filters...")
 def process_countries_and_institutions(preprocessed_df):
     """Process and extract unique countries and institutions from preprocessed dataset"""
+    log_data_op("processing_locations", len(preprocessed_df))
+    
     # Extract unique countries from string representations
     countries = []
     for country_str in preprocessed_df['countries_list']:
@@ -77,30 +109,42 @@ def process_countries_and_institutions(preprocessed_df):
     institutions = list(set(institutions))
     institutions = [str(inst) for inst in institutions if inst]
     
+    log_data_op("locations_processed", f"{len(countries)} countries, {len(institutions)} institutions")
     return sorted(countries), sorted(institutions)
 
-@st.cache_data(ttl=1800, max_entries=5, show_spinner="Loading Metadata Filters...")
 def lightning_fast_filter(preprocessed_df, selected_country, selected_institution):
-    """Super fast filtering using preprocessed data - no more ast.literal_eval!"""
-    result = preprocessed_df.copy()
+    """Super fast filtering using preprocessed data"""
+    # Use view instead of copy to save memory
+    result = preprocessed_df  # Start with original reference
+    initial_rows = len(result)
     
     if selected_country != 'All':
         mask = result['countries_list'].apply(lambda x: selected_country in ast.literal_eval(x))
-        result = result[mask]
+        result = result[mask].copy()  # Only copy when actually filtering
+        print(f"[FILTER] Country '{selected_country}': {initial_rows} -> {len(result)} rows")
+        # Force cleanup of mask
+        del mask
+        gc.collect()
+        log_memory("after_country_filter_with_cleanup")
     
     if selected_institution != 'All':
+        pre_inst_rows = len(result)
         mask = result['institutions_list'].apply(lambda x: selected_institution in ast.literal_eval(x))
-        result = result[mask]
+        result = result[mask].copy()  # Only copy when actually filtering
+        print(f"[FILTER] Institution '{selected_institution}': {pre_inst_rows} -> {len(result)} rows")
+        # Force cleanup of mask
+        del mask
+        gc.collect()
+        log_memory("after_institution_filter_with_cleanup")
     
+    log_memory("after_geographic_filter")
     return result
 
-@st.cache_data(ttl=1800, max_entries=3, show_spinner="Loading Metadata...")
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Loading Metadata...")
 def calculate_statistics(filtered_df, papers_df, selected_country, selected_institution):
     """Calculate statistics for the filtered dataset"""
     # Filter publications based on the DOIs in the working dataframe
     filtered_publications = papers_df[papers_df['doi'].isin(filtered_df['doi'].tolist())]
-    
-    # Basic stats
     total_papers = len(filtered_publications)
     
     # Date range
@@ -143,81 +187,74 @@ def get_filtered_data(selected_country, selected_institution):
     preprocessed_papers = get_preprocessed_papers()
     return lightning_fast_filter(preprocessed_papers, selected_country, selected_institution)
 
-def get_exploded_sankey_data(working_df_dois, all_selected_context, all_selected_study_types, all_selected_mechanisms, all_selected_behaviors):
-    """Filter FIRST, then explode - with categorical preservation"""
-    import re
+def get_exploded_sankey_data(
+    working_df_dois,
+    all_selected_context,
+    all_selected_study_types,
+    all_selected_mechanisms,
+    all_selected_behaviors
+):
+    log_data_op("sankey_filter_start", len(working_df_dois))
     
     labels_data = get_labels_data()
-    
-    # Step 1: Filter by DOIs first (smallest operation)
-    sankey_working_df = labels_data[labels_data['doi'].isin(working_df_dois)]
-    
-    # Step 2: Apply content filters BEFORE exploding
-    # Convert categorical to string for filtering, then back to categorical
-    
-    if all_selected_context:
-        context_pattern = '|'.join([re.escape(ctx) for ctx in all_selected_context])
-        # Convert categorical to string for str.contains, then filter
-        context_mask = sankey_working_df['poverty_context'].astype(str).str.contains(context_pattern, na=False, case=False)
-        sankey_working_df = sankey_working_df[context_mask]
-    
-    if all_selected_study_types:
-        study_pattern = '|'.join([re.escape(st) for st in all_selected_study_types])
-        study_mask = sankey_working_df['study_type'].astype(str).str.contains(study_pattern, na=False, case=False)
-        sankey_working_df = sankey_working_df[study_mask]
-    
-    if all_selected_mechanisms:
-        mechanism_pattern = '|'.join([re.escape(mech) for mech in all_selected_mechanisms])
-        mechanism_mask = sankey_working_df['mechanism'].astype(str).str.contains(mechanism_pattern, na=False, case=False)
-        sankey_working_df = sankey_working_df[mechanism_mask]
-    
-    if all_selected_behaviors:
-        behavior_pattern = '|'.join([re.escape(beh) for beh in all_selected_behaviors])
-        behavior_mask = sankey_working_df['behavior'].astype(str).str.contains(behavior_pattern, na=False, case=False)
-        sankey_working_df = sankey_working_df[behavior_mask]
-    
-    # Step 3: Convert categoricals to strings for exploding
-    working_df_exploded = sankey_working_df.copy()
-    
-    # Convert categorical columns to string before string operations
-    categorical_columns = ['poverty_context', 'mechanism', 'study_type', 'behavior']
-    for col in categorical_columns:
-        if col in working_df_exploded.columns:
-            working_df_exploded[col] = working_df_exploded[col].astype(str)
-    
-    # Explode operations (now on string columns)
-    working_df_exploded['poverty_context'] = working_df_exploded['poverty_context'].str.split(',')
-    working_df_exploded = working_df_exploded.explode('poverty_context')
-    working_df_exploded['poverty_context'] = working_df_exploded['poverty_context'].str.strip()
-    
-    working_df_exploded['mechanism'] = working_df_exploded['mechanism'].str.split(',')
-    working_df_exploded = working_df_exploded.explode('mechanism')
-    working_df_exploded['mechanism'] = working_df_exploded['mechanism'].str.strip()
-    
-    working_df_exploded['study_type'] = working_df_exploded['study_type'].str.split(',')
-    working_df_exploded = working_df_exploded.explode('study_type')
-    working_df_exploded['study_type'] = working_df_exploded['study_type'].str.strip()
-    
-    working_df_exploded['behavior'] = working_df_exploded['behavior'].str.split(',')
-    working_df_exploded = working_df_exploded.explode('behavior')
-    working_df_exploded['behavior'] = working_df_exploded['behavior'].str.strip()
 
-    # Step 4: Final exact filtering
-    if all_selected_context:
-        working_df_exploded = working_df_exploded[working_df_exploded['poverty_context'].isin(all_selected_context)]
-    if all_selected_study_types:
-        working_df_exploded = working_df_exploded[working_df_exploded['study_type'].isin(all_selected_study_types)]
-    if all_selected_mechanisms:
-        working_df_exploded = working_df_exploded[working_df_exploded['mechanism'].isin(all_selected_mechanisms)]
-    if all_selected_behaviors:
-        working_df_exploded = working_df_exploded[working_df_exploded['behavior'].isin(all_selected_behaviors)]
+    # Step 1: Initial DOI filter - add light cleanup
+    sankey_df = labels_data[labels_data['doi'].isin(working_df_dois)]
+    del labels_data  # Just this one cleanup
+    log_memory("after_doi_filter")
+
+    # Step 2: Pre-explosion filters
+    def apply_pre_filter(df, col, selections):
+        if selections:
+            pattern = '|'.join([re.escape(val) for val in selections])
+            return df[df[col].astype(str).str.contains(pattern, na=False, case=False)]
+        return df
+            
+    sankey_df = apply_pre_filter(sankey_df, 'poverty_context', all_selected_context)
+    sankey_df = apply_pre_filter(sankey_df, 'study_type', all_selected_study_types)
+    sankey_df = apply_pre_filter(sankey_df, 'mechanism', all_selected_mechanisms)
+    sankey_df = apply_pre_filter(sankey_df, 'behavior', all_selected_behaviors)
+    log_memory("after_pre_filters")
+
+    # Step 3: Convert relevant columns to string and explode
+    def safe_explode(df, col):
+        df[col] = df[col].astype(str).str.split(',').apply(lambda x: [v.strip() for v in x])
+        return df.explode(col)
+
+    for col, selections in [
+        ('poverty_context', all_selected_context),
+        ('mechanism', all_selected_mechanisms),
+        ('study_type', all_selected_study_types),
+        ('behavior', all_selected_behaviors)
+    ]:
+        sankey_df = safe_explode(sankey_df, col)
+    log_memory("after_explosions")
+
+    # Step 4: Final exact matching
+    def exact_filter(df, col, selections):
+        if selections:
+            return df[df[col].isin(selections)]
+        return df
+
+    sankey_df = exact_filter(sankey_df, 'poverty_context', all_selected_context)
+    sankey_df = exact_filter(sankey_df, 'study_type', all_selected_study_types)
+    sankey_df = exact_filter(sankey_df, 'mechanism', all_selected_mechanisms)
+    sankey_df = exact_filter(sankey_df, 'behavior', all_selected_behaviors)
+    log_memory("after_exact_filters")
     
-    # Step 5: Convert back to categorical for final DataFrame (optional but saves memory)
-    for col in categorical_columns:
-        if col in working_df_exploded.columns:
-            working_df_exploded[col] = working_df_exploded[col].astype('category')
+    # Step 5: Convert back to categorical or Arrow string
+    for col in ['poverty_context', 'mechanism', 'study_type', 'behavior']:
+        if col in sankey_df.columns:
+            sankey_df[col] = pd.Series(pd.array(sankey_df[col], dtype="string[pyarrow]"))
+
+    # Light cleanup at the end
+    result = sankey_df.copy()
+    del sankey_df
+    gc.collect()
     
-    return working_df_exploded
+    log_data_op("sankey_filter_complete", len(result))
+    log_memory("after_sankey_light_cleanup")
+    return result
 
 # Function to load environment variables with Streamlit compatibility
 def load_environment_variables():
@@ -321,68 +358,120 @@ def get_healthy_bigquery_client():
     client.get_healthy_client()
     return client
 
-@st.cache_data(ttl=3600, max_entries=1, show_spinner="Connecting to Database...")
-def load_country_institution_data():
+# ============================================================================
+# UNIFIED DATA LOADER - REPLACES ALL SEPARATE LOADING FUNCTIONS
+# ============================================================================
+
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Connection to Database...")  # Reduced from 3600 to 600 seconds
+def load_unified_papers_data():
+    """
+    Single function to load ALL paper data once (excluding abstracts for memory efficiency).
+    Replaces: load_country_institution_data, load_label_data, load_umap
+    """
+    log_data_op("unified_data_load_start")
+    
     try:
         client = get_healthy_bigquery_client()
-        df = client.execute_query(
-            "SELECT doi, country, date, institution, country_of_study "
-            "FROM `literature-452020.psychology_of_poverty_literature.papers`"
-        )
         
-        categorical_columns = ['country', 'institution', 'country_of_study']
+        # ONE query to get everything EXCEPT abstracts (abstracts loaded on-demand)
+        df = client.execute_query("""
+            SELECT 
+                doi, title, authors, date,
+                country, institution, country_of_study,
+                study_type, poverty_context, mechanism, behavior,
+                UMAP1, UMAP2
+            FROM `literature-452020.psychology_of_poverty_literature.papers`
+        """)
+        
+        log_data_op("query_complete", len(df))
+        
+        # Convert to categorical ONCE for all relevant columns
+        categorical_columns = [
+            'country', 'institution', 'country_of_study', 
+            'study_type', 'poverty_context', 'mechanism', 
+            'behavior', 'authors'
+        ]
         
         for col in categorical_columns:
             if col in df.columns:
                 df[col] = df[col].astype('category')
-                
+        
+        log_data_op("unified_data_load_complete", len(df))
+        
+        # Check memory after caching this large dataset
+        log_memory("after_large_data_cached")
+        
         return df
+        
     except Exception as e:
-        st.error(f"Failed to load data: {str(e)}")
+        st.error(f"Failed to load unified data: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=3600, max_entries=1, show_spinner="Loading Sankey Diagram Data...")
-def load_label_data():
-    try:
-        client = get_healthy_bigquery_client()
-        df = client.execute_query(
-            "SELECT doi, authors, study_type, poverty_context, "
-            "mechanism, behavior "
-            "FROM `literature-452020.psychology_of_poverty_literature.papers`"
-        )
-        
-        categorical_columns = ['study_type', 'poverty_context', 'mechanism', 'behavior', 'authors']
-        
-        for col in categorical_columns:
-            if col in df.columns:
-                # Convert to categorical - massive memory savings
-                df[col] = df[col].astype('category')
-                
-        return df
-    except Exception as e:
-        st.error(f"Failed to load label data: {str(e)}")
-        return pd.DataFrame()
+# ============================================================================
+# LIGHTWEIGHT DATA ACCESSORS - NO SEPARATE DATABASE CALLS
+# ============================================================================
 
-@st.cache_data(ttl=3600, max_entries=1, show_spinner="Loading Heatmap Data...")
+def get_papers_data():
+    """Get geography/institution subset - NO separate database call"""
+    df = load_unified_papers_data()
+    return df[['doi', 'country', 'date', 'institution', 'country_of_study']]
+
+def get_labels_data():
+    """Get labels subset - NO separate database call"""
+    df = load_unified_papers_data()
+    return df[['doi', 'authors', 'study_type', 'poverty_context', 'mechanism', 'behavior']]
+
+def get_umap_data():
+    """Get UMAP subset - NO separate database call"""
+    df = load_unified_papers_data()
+    result = df[['title', 'doi', 'UMAP1', 'UMAP2', 'date']].copy()  # Explicit copy
+    
+    # Convert numeric columns once
+    result.loc[:, 'UMAP1'] = pd.to_numeric(result['UMAP1'], errors='coerce')
+    result.loc[:, 'UMAP2'] = pd.to_numeric(result['UMAP2'], errors='coerce')
+    
+    return result
+
+def get_full_paper_data():
+    """Get complete dataset when needed"""
+    return load_unified_papers_data()
+
+# ============================================================================
+# KEEP TOPICS SEPARATE (DIFFERENT TABLE)
+# ============================================================================
+
+@st.cache_data(ttl=300, max_entries=1, show_spinner="Loading Heatmap Data...")
 def load_topics():
     try:
         client = get_healthy_bigquery_client()
-        return client.execute_query(
+        result = client.execute_query(
             "SELECT * "
             "FROM `literature-452020.psychology_of_poverty_literature.topics`"
         )
+        
+        # Convert numeric columns once
+        result.loc[:, 'umap_1_mean'] = pd.to_numeric(result['umap_1_mean'], errors='coerce')
+        result.loc[:, 'umap_2_mean'] = pd.to_numeric(result['umap_2_mean'], errors='coerce')
+        
+        log_data_op("topics_loaded", len(result))
+        return result
     except Exception as e:
         st.error(f"Failed to load topics: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=1800, max_entries=10, show_spinner="Loading Abstract Data...")
+# ============================================================================
+# SEPARATE ABSTRACT LOADING - KEEP DATABASE QUERIES FOR MEMORY EFFICIENCY
+# ============================================================================
+
+@st.cache_data(ttl=300, max_entries=10, show_spinner="Loading Paper Details...")
 def load_abstract_data(title):
+    """Load abstract with separate database query - abstracts are too large for unified cache"""
     try:
         client = get_healthy_bigquery_client()
         # Handle all problematic characters
         safe_title = title.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
         
-        return client.execute_query(
+        result = client.execute_query(
             f"""
             SELECT abstract, title, authors, study_type, poverty_context, mechanism, behavior
             FROM `literature-452020.psychology_of_poverty_literature.papers`
@@ -390,24 +479,12 @@ def load_abstract_data(title):
             LIMIT 1
             """
         )
+        log_data_op("abstract_loaded")
+        return result
     except Exception as e:
         st.error(f"Failed to load abstract data: {str(e)}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=3600, max_entries=1, show_spinner="Loading Heat Map Data...")
-def load_umap():
-    try:
-        client = get_healthy_bigquery_client()
-        return client.execute_query(
-            f"""
-            SELECT  title, doi, UMAP1, UMAP2, date
-            FROM `literature-452020.psychology_of_poverty_literature.papers`
-            """
-        )
-    except Exception as e:
-        st.error(f"Failed to load UMAP data: {str(e)}")
-        return pd.DataFrame()
-    
 def get_working_df_exploded_cached(country, institution, contexts, study_types, mechanisms, behaviors):
     """Process on demand - now much faster due to pre-filtering"""
     working_df = get_filtered_data(country, institution)
@@ -420,18 +497,9 @@ def get_working_df_exploded_cached(country, institution, contexts, study_types, 
         list(behaviors)
     )
 
-def get_papers_data():
-    return load_country_institution_data()
-
 def get_preprocessed_papers():
     papers_df = get_papers_data()
     return preprocess_papers_data(papers_df)
-
-def get_labels_data():
-    return load_label_data()
-
-def get_umap_data():
-    return load_umap()
 
 @st.fragment
 def paper_details_fragment():
@@ -461,9 +529,11 @@ def paper_details_fragment():
 
             # Only load abstract if paper changed (completely independent operation)
             if selected_paper != st.session_state.ui_state.get('current_selected_paper'):
+                print(f"[PAPER] Selected: {selected_paper[:50]}...")
                 st.session_state.ui_state['current_selected_paper'] = selected_paper
                 with st.spinner("Loading paper details..."):
                     st.session_state.ui_state['current_paper_details'] = load_abstract_data(selected_paper)
+                log_memory("after_paper_selection")
             
             # Display cached paper details
             filtered_data = st.session_state.ui_state.get('current_paper_details', pd.DataFrame())
@@ -530,7 +600,6 @@ def paper_details_fragment():
         else:
             st.write("No papers available for visualization with current filters.")
 
-
 from functools import lru_cache
 
 @st.cache_data
@@ -588,88 +657,380 @@ def process_tree_selections(selections, min_depth=2):
     return result
 
 @st.fragment
-def filter_selection_fragment():
+def sankey_heatmap_fragment():
     """
-    Optimized filter selection fragment with caching and reduced memory usage
+    Fragment that includes filters, Sankey diagram, heatmap, and data processing
     """
-    # Load cached data
+
     filters, study_types_tree, mechanisms_tree, behaviors_tree = load_and_process_filters()
-    
-    # UI Components
-    st.markdown("###### Poverty Contexts")
-    selected_contexts = st.multiselect(
-        "Select", 
-        list(filters['poverty_contexts'].keys()), 
-        key="sankey_contexts"
-    )
-    
-    st.markdown("###### Study Types") 
-    selected_study_types = tree_select(study_types_tree, key="sankey_study_types")
-    
-    st.markdown("###### Psychological Mechanisms")
-    selected_mechanisms = tree_select(mechanisms_tree, key="sankey_mechanisms")
-    
-    st.markdown("###### Behavioral Outcomes")
-    selected_behaviors = tree_select(behaviors_tree, key="sankey_behaviors")
-    
-    # Process selections efficiently
+        
+    # Get current filter selections (lightweight check)
+    selected_contexts = st.session_state.get("sankey_contexts", [])
+    selected_study_types = st.session_state.get("sankey_study_types", {})
+    selected_mechanisms = st.session_state.get("sankey_mechanisms", {})
+    selected_behaviors = st.session_state.get("sankey_behaviors", {})
+   
+    # Process selections BEFORE signature calculation
     all_selected_context = []
     if selected_contexts:
-        # Use extend with generator for memory efficiency
         for key in selected_contexts:
             all_selected_context.extend(filters['poverty_contexts'][key])
     
-    # Process tree selections with optimized function
     all_selected_study_types = process_tree_selections(selected_study_types, min_depth=3)
     all_selected_mechanisms = process_tree_selections(selected_mechanisms, min_depth=2)
     all_selected_behaviors = process_tree_selections(selected_behaviors, min_depth=2)
-    
-    # Create signature more efficiently using frozenset for hashable collections
-    current_signature = hash((
-        frozenset(all_selected_context),
-        frozenset(all_selected_study_types), 
-        frozenset(all_selected_mechanisms),
-        frozenset(all_selected_behaviors)
+
+    previous_quick_signature = st.session_state.get('quick_filter_signature', 0)
+   
+    # Create signature using processed results only
+    quick_signature = hash((
+        tuple(sorted(all_selected_context)) if all_selected_context else (),
+        tuple(sorted(all_selected_study_types)) if all_selected_study_types else (),
+        tuple(sorted(all_selected_mechanisms)) if all_selected_mechanisms else (),
+        tuple(sorted(all_selected_behaviors)) if all_selected_behaviors else (),
+        st.session_state.ui_state.get('selected_country', 'All'),
+        st.session_state.ui_state.get('selected_institution', 'All')
     ))
+   
+    if quick_signature == previous_quick_signature and previous_quick_signature != 0:
+        # Skip expensive computation but continue with UI rendering
+        pass
     
-    previous_signature = st.session_state.get('filter_signature', 0)
-    
-    # Only update session state if values changed (reduces memory writes)
-    if current_signature != previous_signature:
-        st.session_state.update({
-            'filters': filters,
-            'selected_contexts': selected_contexts,
-            'all_selected_context': all_selected_context,
-            'all_selected_study_types': all_selected_study_types,
-            'all_selected_mechanisms': all_selected_mechanisms,
-            'all_selected_behaviors': all_selected_behaviors,
-            'filter_signature': current_signature
-        })
+    st.session_state['quick_filter_signature'] = quick_signature
+
+    with st.spinner("Applying Filters..."):
+        # Load cached data       
+        col1, col2 = st.columns([1, 6])
         
-        # Only rerun if this isn't the initial load
-        if previous_signature != 0:
-            st.rerun()
-
-
+        with col1:
+            # All your filter UI code
+            st.markdown("###### Poverty Contexts")
+            selected_contexts = st.multiselect(
+                "Select", 
+                list(filters['poverty_contexts'].keys()), 
+                key="sankey_contexts"
+            )
             
+            st.markdown("###### Study Types") 
+            selected_study_types = tree_select(study_types_tree, key="sankey_study_types")
+            
+            st.markdown("###### Psychological Mechanisms")
+            selected_mechanisms = tree_select(mechanisms_tree, key="sankey_mechanisms")
+            
+            st.markdown("###### Behavioral Outcomes")
+            selected_behaviors = tree_select(behaviors_tree, key="sankey_behaviors")
+            
+            # Process selections efficiently
+            all_selected_context = []
+            if selected_contexts:
+                for key in selected_contexts:
+                    all_selected_context.extend(filters['poverty_contexts'][key])
+            
+            all_selected_study_types = process_tree_selections(selected_study_types, min_depth=3)
+            all_selected_mechanisms = process_tree_selections(selected_mechanisms, min_depth=2)
+            all_selected_behaviors = process_tree_selections(selected_behaviors, min_depth=2)
+            
+            # Get exploded data (cached based on sankey filters)
+            working_df_exploded = get_working_df_exploded_cached(
+                st.session_state.ui_state['selected_country'],
+                st.session_state.ui_state['selected_institution'],
+                tuple(all_selected_context),
+                tuple(all_selected_study_types),
+                tuple(all_selected_mechanisms),
+                tuple(all_selected_behaviors)
+            )
+
+            # Post-Sankey cleanup
+            variables_to_cleanup = ['working_df', 'umap_data', 'labels_data']
+            cleaned_count = 0
+            for var_name in variables_to_cleanup:
+                if var_name in locals():
+                    del locals()[var_name]
+                    cleaned_count += 1
+
+            print(f"[POST_SANKEY_CLEANUP] Deleted {cleaned_count} variables")
+
+            # Multiple garbage collection passes to clean up Series objects
+            for i in range(5):
+                collected = gc.collect()
+                if collected == 0:
+                    break
+                print(f"[POST_SANKEY_GC] Pass {i+1}: collected {collected} objects")
+
+            log_memory("after_post_sankey_aggressive_cleanup")
+            check_memory()
+
+        with col2:
+            with st.spinner("Generating Sankey Diagram..."):   
+                # Create columns for the toggle chips
+                col1_inner, col2_inner, col3_inner, col4_inner = st.columns(4)
+
+                with col1_inner:
+                    show_context = st.checkbox("Poverty Context", value=True, key="node_context")
+
+                with col2_inner:
+                    show_study = st.checkbox("Study Type", value=True, key="node_study")
+
+                with col3_inner:
+                    show_mechanism = st.checkbox("Psychological Mechanism", value=True, key="node_mechanism")
+
+                with col4_inner:
+                    show_behavior = st.checkbox("Behavioral Outcomes", value=True, key="node_behavior")
+
+                # Build selected nodes list
+                selected_nodes = []
+                if show_context:
+                    selected_nodes.append('poverty_context')
+                if show_study:
+                    selected_nodes.append('study_type')
+                if show_mechanism:
+                    selected_nodes.append('mechanism')
+                if show_behavior:
+                    selected_nodes.append('behavior')
+                else: 
+                    selected_nodes = ['poverty_context', 'study_type', 'mechanism', 'behavior']
+
+                # Prepare active_filters dictionary for the sankey function
+                active_filters = {
+                    'contexts': selected_contexts if selected_contexts else [],
+                    'study_types': all_selected_study_types if all_selected_study_types else [],
+                    'mechanisms': all_selected_mechanisms if all_selected_mechanisms else [],
+                    'behaviors': all_selected_behaviors if all_selected_behaviors else []
+                }
+                
+                # Create and display the Sankey diagram with adaptive detail
+                sankey_diagram = sankey.Sankey(filters_json = filters)
+
+                if not working_df_exploded.empty:
+                    sankey_fig = sankey_diagram.draw(working_df_exploded, 
+                                                    active_filters=active_filters,
+                                                    columns_to_show = selected_nodes)
+                    st.plotly_chart(sankey_fig, use_container_width=True)
+                else:
+                    st.write("No data available for selected filters.")
+
+    # Get data for heatmap directly (no session state caching)
+    umap_data = get_umap_data()
+    plot_df = umap_data[umap_data['doi'].isin(working_df_exploded['doi'].tolist())].copy()
+    topics_df = load_topics()
+    
+    # Update session state for paper details fragment only
+    st.session_state.ui_state['current_papers_list'] = plot_df['title'].tolist() if not plot_df.empty else []
+
+    st.markdown("#### Research Landscape")
+    
+    col1_heat, col2_heat = st.columns([2, 1])
+    
+    with col1_heat:
+        # UMAP visualization
+        if not plot_df.empty:
+            with st.spinner("Generating research landscape visualization..."):
+                heatmap_fig = heatMap.heatmap(plot_df, topics_df)
+                st.plotly_chart(heatmap_fig.draw(), use_container_width=True)
+        else:
+            st.write("No data available for heatmap with current filters.")
+        
+        # Main explanation with better terminology
+        st.markdown("""            
+        This visualization creates a **living map** of academic research, where similar studies naturally cluster together like neighborhoods in a city. 
+        Watch how knowledge evolves, new ideas emerge, and research communities form over time.
+        """)
+        
+        # Enhanced instruction columns
+        col4, col5 = st.columns(2)
+        
+        with col4:
+            st.markdown("""
+            #### **Reading the Map**
+            
+            **Research Papers (White Dots)**
+            - Each dot represents one published study
+            - Hover to see paper title and details
+            - Position shows content similarity to other papers
+            
+            **Research Intensity (Color Heat)**
+            - **Purple areas**: Sparse research, unexplored territories
+            - **Green-blue areas**: Moderate research activity  
+            - **Bright yellow peaks**: High-activity research hotspots
+            
+            **Topic Labels (White Text)**
+            - Show major research themes and communities
+            - Positioned at the center of each research cluster
+            """)
+        
+        with col5:
+            st.markdown("""
+            #### **Interactive Controls**
+            
+            **Time Slider (Bottom)**
+            - Drag to travel through research history
+            - Watch clusters form, grow, split, and merge
+            - Observe how topics gain or lose momentum
+            
+            **Exploration Tips**
+            - **Identify trends**: Look for growing yellow areas
+            - **Find gaps**: Purple spaces = research opportunities  
+            - **Track evolution**: Follow clusters across years
+            - **Spot emergence**: New clusters appearing at edges
+            - **See convergence**: Separate topics moving together
+            """)
+        
+        # Advanced insights section
+        with st.expander("Advanced Insights", expanded=False):
+            st.markdown("""
+
+            #### **Advanced Insights**
+            
+            **Strategic Research Planning**
+            - **Hot zones** (yellow): Competitive, well-established areas
+            - **Transition zones** (green): Emerging opportunities with moderate competition
+            - **Frontier zones** (purple): High-risk, high-reward unexplored areas
+            
+            **Temporal Patterns to Watch**
+            - **Cluster growth**: Topics gaining academic attention
+            - **Cluster migration**: Research focus shifting direction  
+            - **Cluster fragmentation**: Fields becoming more specialized
+            - **Cluster convergence**: Interdisciplinary collaboration increasing
+            
+            **Research Discovery**
+            - Papers at cluster edges often represent innovative boundary work
+            - Isolated papers may be ahead of their time or highly specialized
+            - Dense cluster centers represent well-established, foundational work
+            """)
+        
+        # Technical note
+        with st.expander("Technical Details"):
+            st.markdown("""
+            **How it works:**
+            - Papers are positioned using **UMAP** (Uniform Manifold Approximation and Projection)
+            - Similar research content creates natural clustering patterns
+            - Density estimation reveals research concentration patterns
+            - Time animation shows cumulative research up to each year
+            
+            **Data processing:**
+            - Each paper's abstract and metadata are converted to mathematical vectors
+            - Dimensionality reduction projects high-dimensional similarity into 2D space
+            - Gaussian density estimation creates smooth intensity surfaces
+            """)
+
+    with col2_heat:
+        paper_details_fragment()
+    
+    # Clean up local variables to prevent memory leaks
+    del umap_data, plot_df, topics_df, working_df_exploded
+    gc.collect()
+    log_memory("after_fragment_cleanup")
+
+        
+# Add this function to help debug cache issues
+def debug_cache_sizes():
+    """Debug function to check cache sizes"""
+    try:
+        # This will help us see what's in cache
+        print("[CACHE_DEBUG] Checking cache contents...")
+        
+        # Check memory by object type
+        import sys
+        object_counts = {}
+        total_size = 0
+        
+        for obj in gc.get_objects():
+            obj_type = type(obj).__name__
+            if obj_type not in object_counts:
+                object_counts[obj_type] = {'count': 0, 'size': 0}
+            object_counts[obj_type]['count'] += 1
+            try:
+                obj_size = sys.getsizeof(obj)
+                object_counts[obj_type]['size'] += obj_size
+                total_size += obj_size
+            except:
+                pass
+        
+        # Show top memory consumers
+        sorted_objects = sorted(object_counts.items(), 
+                            key=lambda x: x[1]['size'], reverse=True)[:10]
+        
+        print(f"[MEMORY_DEBUG] Total tracked size: {total_size / 1024 / 1024:.1f} MB")
+        print("[MEMORY_DEBUG] Top 10 memory consumers:")
+        for obj_type, stats in sorted_objects:
+            size_mb = stats['size'] / 1024 / 1024
+            print(f"  {obj_type}: {stats['count']} objects, {size_mb:.1f} MB")
+        
+        # Force garbage collection and check memory
+        collected = gc.collect()
+        print(f"[CACHE_DEBUG] Garbage collected {collected} objects")
+        log_memory("after_gc_debug")
+        
+    except Exception as e:
+        print(f"[CACHE_DEBUG] Error: {e}")
+
+# Add cleanup function for main()
+def cleanup_dataframes():
+    """Clean up DataFrame variables to prevent memory leaks"""
+    import gc
+    import sys
+    
+    # Get current frame
+    frame = sys._getframe(1)  # Get caller's frame
+    local_vars = frame.f_locals
+    
+    # Find DataFrame variables and delete them
+    to_delete = []
+    for name, obj in local_vars.items():
+        if hasattr(obj, 'dtypes') and hasattr(obj, 'columns'):  # It's a DataFrame
+            to_delete.append(name)
+    
+    for name in to_delete:
+        if name in local_vars:
+            del local_vars[name]
+    
+    # Force garbage collection
+    collected = gc.collect()
+    print(f"[CLEANUP] Deleted {len(to_delete)} DataFrames, collected {collected} objects")
+    log_memory("after_dataframe_cleanup")
+
+# Simple periodic memory check
+def check_memory():
+    """Quick memory check - call this occasionally"""
+    log_memory("memory_check")
+    debug_cache_sizes()  # Add cache debugging
+    monitor_and_clear_cache()
+
+# App start with aggressive cache clearing
+print("=" * 50)
+print("[APP] Streamlit application starting")
+
+# Clear all caches at startup to prevent memory buildup
+try:
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    print("[APP] Cleared all caches at startup")
+except Exception as e:
+    print(f"[APP] Cache clear error: {e}")
+
+# Force garbage collection at startup
+collected = gc.collect()
+print(f"[APP] Garbage collected {collected} objects at startup")
+
+log_memory("app_start_after_cleanup")
 
 def main():  
 
-    with st.sidebar:
-        st.markdown("### System Status")
+    # with st.sidebar:
+    #     st.markdown("### System Status")
         
-        # Memory Usage
-        try:
-            process = psutil.Process()
-            memory_mb = process.memory_info().rss / 1024 / 1024
+    #     # Memory Usage
+    #     try:
+    #         process = psutil.Process()
+    #         memory_mb = process.memory_info().rss / 1024 / 1024
             
-            if memory_mb < 1500:
-                st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="Healthy")
-            else:
-                st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="High", delta_color="inverse")
+    #         if memory_mb < 1500:
+    #             st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="Healthy")
+    #         else:
+    #             st.metric("Memory Usage", f"{memory_mb:.0f} MB", delta="High", delta_color="inverse")
                 
-        except ImportError:
-            st.metric("Memory Usage", "N/A", delta="Install psutil")
+    #     except ImportError:
+    #         st.metric("Memory Usage", "N/A", delta="Install psutil")
 
     monitor_and_clear_cache()
 
@@ -777,9 +1138,18 @@ def main():
     # Understanding the Field Tab
     with tab1:
 
-        # Get base data (cached - loads once)
+        # # Get base data (cached - loads once)
+        # if 'papers_df' and 'preprocessed_papers' not in st.session_state:
+        #     papers_df = get_papers_data()
+        #     preprocessed_papers = get_preprocessed_papers()
+        #     st.session_state.papers_df = 'present'
+        #     st.session_state.preprocessed_papers = 'present'
+
         papers_df = get_papers_data()
         preprocessed_papers = get_preprocessed_papers()
+        log_memory("after_loading_base_data")
+        check_memory()
+
 
         # Introduction
         st.markdown("""
@@ -859,6 +1229,11 @@ def main():
                 st.session_state.ui_state['selected_country'], 
                 st.session_state.ui_state['selected_institution']
             )
+
+            if 'temp_filtered_df' in locals():
+                del temp_filtered_df
+                gc.collect()
+                log_memory("after_temp_filter_cleanup")
             
             # Calculate stats (only if needed)
             if not st.session_state.ui_state['stats_computed']:
@@ -923,232 +1298,31 @@ def main():
         Performance decreases when visualizing a large number of papers.
         """)
             
-        col1, col2 = st.columns([1, 6])
-
-        with col1:
-
-
-            with st.spinner("Applying Filters..."):
-
-                filter_selection_fragment()
-
-                filters = st.session_state.get('filters', {})
-                selected_contexts = st.session_state.get('selected_contexts', [])
-                all_selected_context = st.session_state.get('all_selected_context', [])
-                all_selected_study_types = st.session_state.get('all_selected_study_types', [])
-                all_selected_mechanisms = st.session_state.get('all_selected_mechanisms', [])
-                all_selected_behaviors = st.session_state.get('all_selected_behaviors', [])
-                
-                # Get exploded data (cached based on sankey filters)
-                working_df_exploded = get_working_df_exploded_cached(
-                    st.session_state.ui_state['selected_country'],
-                    st.session_state.ui_state['selected_institution'],
-                    tuple(all_selected_context),
-                    tuple(all_selected_study_types),
-                    tuple(all_selected_mechanisms),
-                    tuple(all_selected_behaviors)
-                )
-
-        # In col2, use working_df_viz for the Sankey
-        with col2:
-            # Access the filter values from session state (set by the fragment)
-            filters = st.session_state.get('filters', {})
-            selected_contexts = st.session_state.get('selected_contexts', [])
-            all_selected_context = st.session_state.get('all_selected_context', [])
-            all_selected_study_types = st.session_state.get('all_selected_study_types', [])
-            all_selected_mechanisms = st.session_state.get('all_selected_mechanisms', [])
-            all_selected_behaviors = st.session_state.get('all_selected_behaviors', [])
-            
-            # Get exploded data (cached based on sankey filters)
-            working_df_exploded = get_working_df_exploded_cached(
-                st.session_state.ui_state['selected_country'],
-                st.session_state.ui_state['selected_institution'],
-                tuple(all_selected_context),
-                tuple(all_selected_study_types),
-                tuple(all_selected_mechanisms), 
-                tuple(all_selected_behaviors)
-            )
-            
-            with st.spinner("Generating Sankey Diagram..."):   
-
-                # Create columns for the toggle chips
-                col1, col2, col3, col4 = st.columns(4)
-
-                with col1:
-                    show_context = st.checkbox("Poverty Context", value=True, key="node_context")
-
-                with col2:
-                    show_study = st.checkbox("Study Type", value=True, key="node_study")
-
-                with col3:
-                    show_mechanism = st.checkbox("Psychological Mechanism", value=True, key="node_mechanism")
-
-                with col4:
-                    show_behavior = st.checkbox("Behavioral Outcomes", value=True, key="node_behavior")
-
-                # Build selected nodes list
-                selected_nodes = []
-                if show_context:
-                    selected_nodes.append('poverty_context')
-                if show_study:
-                    selected_nodes.append('study_type')
-                if show_mechanism:
-                    selected_nodes.append('mechanism')
-                if show_behavior:
-                    selected_nodes.append('behavior')
-                else: 
-                    selected_nodes = ['poverty_context', 'study_type', 'mechanism', 'behavior']
-
-                # Prepare active_filters dictionary for the sankey function
-                active_filters = {
-                    'contexts': selected_contexts if selected_contexts else [],
-                    'study_types': all_selected_study_types if all_selected_study_types else [],
-                    'mechanisms': all_selected_mechanisms if all_selected_mechanisms else [],
-                    'behaviors': all_selected_behaviors if all_selected_behaviors else []
-                }
-                
-                # Create and display the Sankey diagram with adaptive detail
-                sankey_diagram = sankey.Sankey(filters_json = filters)
-
-                if not working_df_exploded.empty:
-                    sankey_fig = sankey_diagram.draw(working_df_exploded, 
-                                                    active_filters=active_filters,
-                                                    columns_to_show = selected_nodes)
-                    st.plotly_chart(sankey_fig, use_container_width=True)
-                else:
-                    st.write("No data available for selected filters.")
-
-            # IMPORTANT: Calculate filter signature BEFORE the Research Landscape section
-            # This prevents the visualization from recalculating when only paper selection changes
-            current_filter_signature = f"{st.session_state.ui_state['selected_country']}_{st.session_state.ui_state['selected_institution']}_{tuple(all_selected_context)}_{tuple(all_selected_study_types)}_{tuple(all_selected_mechanisms)}_{tuple(all_selected_behaviors)}"
-            
-            # Only recompute visualization data when filters actually change
-            if ('current_filter_signature' not in st.session_state.ui_state or 
-                st.session_state.ui_state['current_filter_signature'] != current_filter_signature):
-                
-                # Store new signature
-                st.session_state.ui_state['current_filter_signature'] = current_filter_signature
-                
-                # Get UMAP data and filter it (only when filters change)
-                umap_data = get_umap_data()
-                plot_df = umap_data[umap_data['doi'].isin(working_df_exploded['doi'].tolist())]
-                topics_df = load_topics()
-                
-                # Cache the visualization data
-                st.session_state.ui_state['cached_plot_df'] = plot_df
-                st.session_state.ui_state['cached_topics_df'] = topics_df
-                st.session_state.ui_state['current_papers_list'] = plot_df['title'].tolist() if not plot_df.empty else []
-          
+        # Filter and Sankey diagram fragment
+        sankey_heatmap_fragment()
+        check_memory()
 
         st.markdown("#### Research Landscape")
-
-        # REORDERED: Heatmap first (col1), then paper details (col2)
         col1, col2 = st.columns([2, 1])
 
-        # Use cached data for visualizations (completely separate from paper selection)
-        plot_df = st.session_state.ui_state.get('cached_plot_df', pd.DataFrame())
-        topics_df = st.session_state.ui_state.get('cached_topics_df', pd.DataFrame())
+    
+        
 
-        with col1:
-            # UMAP visualization (only regenerates when filter signature changes)
-            if not plot_df.empty:
-                with st.spinner("Generating research landscape visualization..."):
-                    plot_df['UMAP1'] = pd.to_numeric(plot_df['UMAP1'], errors='coerce')
-                    plot_df['UMAP2'] = pd.to_numeric(plot_df['UMAP2'], errors='coerce')
-                    topics_df['umap_1_mean'] = pd.to_numeric(topics_df['umap_1_mean'], errors='coerce')
-                    topics_df['umap_2_mean'] = pd.to_numeric(topics_df['umap_2_mean'], errors='coerce')
-                    
-                    from visuals import scatterplot
-                    heatmap_fig = heatMap.heatmap(plot_df, topics_df)
-                    st.plotly_chart(heatmap_fig.draw(), use_container_width=True)
-            else:
-                st.write("No data available for heatmap with current filters.")
-            
-            # Main explanation with better terminology
-            st.markdown("""            
-            This visualization creates a **living map** of academic research, where similar studies naturally cluster together like neighborhoods in a city. 
-            Watch how knowledge evolves, new ideas emerge, and research communities form over time.
-            """)
-            
-            # Enhanced instruction columns
-            col4, col5 = st.columns(2)
-            
-            with col4:
-                st.markdown("""
-                #### **Reading the Map**
-                
-                **Research Papers (White Dots)**
-                - Each dot represents one published study
-                - Hover to see paper title and details
-                - Position shows content similarity to other papers
-                
-                **Research Intensity (Color Heat)**
-                - **Purple areas**: Sparse research, unexplored territories
-                - **Green-blue areas**: Moderate research activity  
-                - **Bright yellow peaks**: High-activity research hotspots
-                
-                **Topic Labels (White Text)**
-                - Show major research themes and communities
-                - Positioned at the center of each research cluster
-                """)
-            
-            with col5:
-                st.markdown("""
-                #### **Interactive Controls**
-                
-                **Time Slider (Bottom)**
-                - Drag to travel through research history
-                - Watch clusters form, grow, split, and merge
-                - Observe how topics gain or lose momentum
-                
-                **Exploration Tips**
-                - **Identify trends**: Look for growing yellow areas
-                - **Find gaps**: Purple spaces = research opportunities  
-                - **Track evolution**: Follow clusters across years
-                - **Spot emergence**: New clusters appearing at edges
-                - **See convergence**: Separate topics moving together
-                """)
-            
-            # Advanced insights section
-            with st.expander("Advanced Insights", expanded=False):
-                st.markdown("""
+        
 
-                #### **Advanced Insights**
-                
-                **Strategic Research Planning**
-                - **Hot zones** (yellow): Competitive, well-established areas
-                - **Transition zones** (green): Emerging opportunities with moderate competition
-                - **Frontier zones** (purple): High-risk, high-reward unexplored areas
-                
-                **Temporal Patterns to Watch**
-                - **Cluster growth**: Topics gaining academic attention
-                - **Cluster migration**: Research focus shifting direction  
-                - **Cluster fragmentation**: Fields becoming more specialized
-                - **Cluster convergence**: Interdisciplinary collaboration increasing
-                
-                **Research Discovery**
-                - Papers at cluster edges often represent innovative boundary work
-                - Isolated papers may be ahead of their time or highly specialized
-                - Dense cluster centers represent well-established, foundational work
-                """)
-            
-            # Technical note
-            with st.expander("Technical Details"):
-                st.markdown("""
-                **How it works:**
-                - Papers are positioned using **UMAP** (Uniform Manifold Approximation and Projection)
-                - Similar research content creates natural clustering patterns
-                - Density estimation reveals research concentration patterns
-                - Time animation shows cumulative research up to each year
-                
-                **Data processing:**
-                - Each paper's abstract and metadata are converted to mathematical vectors
-                - Dimensionality reduction projects high-dimensional similarity into 2D space
-                - Gaussian density estimation creates smooth intensity surfaces
-                """)
 
-        with col2:
-            paper_details_fragment()
+        dataframes_to_cleanup = ['papers_df', 'preprocessed_papers', 'working_df_exploded', 
+                           'plot_df', 'topics_df', 'umap_data']
+        cleaned_count = 0
+        for df_name in dataframes_to_cleanup:
+            if df_name in locals():
+                del locals()[df_name]
+                cleaned_count += 1
+        
+        gc.collect()
+        print(f"[MAIN_CLEANUP] Cleaned {cleaned_count} DataFrames at end of main()")
+        check_memory()
+        log_memory("main_function_exit")
             
 
 if __name__ == "__main__":
