@@ -11,6 +11,19 @@ import psutil
 import time
 import re
 import gc
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+# Create logger for this module
+logger = logging.getLogger(__name__)
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(parent_dir)
@@ -19,24 +32,46 @@ from data.bigQuery import Client
 
 st.set_page_config(page_title="Workspace", layout="wide", initial_sidebar_state='collapsed')
 
-# Simplified memory logging - only the essentials
-def log_memory(step_name):
-    process = psutil.Process()
-    memory_mb = process.memory_info().rss / 1024 / 1024
-    print(f"[MEMORY] {step_name}: {memory_mb:.1f} MB")
-    return memory_mb
+def log_memory(step_name: str) -> float:
+    """
+    Recommended replacement for the current log_memory function.
+    Uses USS (Unique Set Size) when available for more accurate measurement.
+    """
+    try:
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        
+        # Use USS if available (Linux/macOS), fallback to RSS
+        if hasattr(memory_info, 'uss'):
+            memory_mb = memory_info.uss / 1024 / 1024
+            metric = "USS"
+        else:
+            memory_mb = memory_info.rss / 1024 / 1024
+            metric = "RSS"
+        
+        logger.info(f"[MEMORY] {step_name}: {memory_mb:.1f} MB ({metric})")
+        
+        # Optional: Add warning for high memory usage
+        if memory_mb > 2000:  # 2GB threshold
+            logger.warning(f"[MEMORY_HIGH] High memory usage detected: {memory_mb:.1f} MB")
+        
+        return memory_mb
+        
+    except Exception as e:
+        logger.error(f"[MEMORY_ERROR] Failed to measure memory: {e}")
+        return 0.0
 
 # Log major filter changes
 def log_filter_change(filter_type, count):
-    print(f"[FILTER] {filter_type}: {count} selected")
+    logger.info(f"[FILTER] {filter_type}: {count} selected")
     log_memory(f"after_{filter_type}_change")
 
 # Log major data operations
 def log_data_op(operation, rows=None):
     if rows:
-        print(f"[DATA] {operation}: {rows} rows")
+        logger.info(f"[DATA] {operation}: {rows} rows")
     else:
-        print(f"[DATA] {operation}")
+        logger.info(f"[DATA] {operation}")
     log_memory(f"after_{operation}")
 
 def monitor_and_clear_cache():
@@ -47,7 +82,7 @@ def monitor_and_clear_cache():
         
         # Clear cache if memory usage exceeds 1.5GB
         if memory_mb > 900:
-            print(f"[CACHE] Clearing cache - memory at {memory_mb:.1f}MB")
+            logger.warning(f"[CACHE] Clearing cache - memory at {memory_mb:.1f}MB")
             st.cache_data.clear()
             st.cache_resource.clear()
             gc.collect()
@@ -112,7 +147,7 @@ def process_countries_and_institutions(preprocessed_df):
     log_data_op("locations_processed", f"{len(countries)} countries, {len(institutions)} institutions")
     return sorted(countries), sorted(institutions)
 
-def lightning_fast_filter(preprocessed_df, selected_country, selected_institution):
+def filtering(preprocessed_df, selected_country, selected_institution):
     """Super fast filtering using preprocessed data"""
     # Use view instead of copy to save memory
     result = preprocessed_df  # Start with original reference
@@ -121,7 +156,7 @@ def lightning_fast_filter(preprocessed_df, selected_country, selected_institutio
     if selected_country != 'All':
         mask = result['countries_list'].apply(lambda x: selected_country in ast.literal_eval(x))
         result = result[mask].copy()  # Only copy when actually filtering
-        print(f"[FILTER] Country '{selected_country}': {initial_rows} -> {len(result)} rows")
+        logger.info(f"[FILTER] Country '{selected_country}': {initial_rows} -> {len(result)} rows")
         # Force cleanup of mask
         del mask
         gc.collect()
@@ -131,7 +166,7 @@ def lightning_fast_filter(preprocessed_df, selected_country, selected_institutio
         pre_inst_rows = len(result)
         mask = result['institutions_list'].apply(lambda x: selected_institution in ast.literal_eval(x))
         result = result[mask].copy()  # Only copy when actually filtering
-        print(f"[FILTER] Institution '{selected_institution}': {pre_inst_rows} -> {len(result)} rows")
+        logger.info(f"[FILTER] Institution '{selected_institution}': {pre_inst_rows} -> {len(result)} rows")
         # Force cleanup of mask
         del mask
         gc.collect()
@@ -185,7 +220,7 @@ def calculate_statistics(filtered_df, papers_df, selected_country, selected_inst
 def get_filtered_data(selected_country, selected_institution):
     """Cache filtered results to avoid recomputation"""
     preprocessed_papers = get_preprocessed_papers()
-    return lightning_fast_filter(preprocessed_papers, selected_country, selected_institution)
+    return filtering(preprocessed_papers, selected_country, selected_institution)
 
 def get_exploded_sankey_data(
     working_df_dois,
@@ -343,10 +378,12 @@ def get_bigquery_client():
         client = Client(credentials, 'literature-452020')
         # Test the connection immediately
         if not client._is_client_healthy():
+            logger.error("Failed to establish healthy database connection")
             st.error("Failed to establish healthy database connection")
             st.stop()
         return client
     except Exception as e:
+        logger.error(f"Failed to connect to database: {str(e)}")
         st.error(f"Failed to connect to database: {str(e)}")
         st.stop()
 
@@ -404,6 +441,7 @@ def load_unified_papers_data():
         return df
         
     except Exception as e:
+        logger.error(f"Failed to load unified data: {str(e)}")
         st.error(f"Failed to load unified data: {str(e)}")
         return pd.DataFrame()
 
@@ -456,6 +494,7 @@ def load_topics():
         log_data_op("topics_loaded", len(result))
         return result
     except Exception as e:
+        logger.error(f"Failed to load topics: {str(e)}")
         st.error(f"Failed to load topics: {str(e)}")
         return pd.DataFrame()
 
@@ -482,6 +521,7 @@ def load_abstract_data(title):
         log_data_op("abstract_loaded")
         return result
     except Exception as e:
+        logger.error(f"Failed to load abstract data: {str(e)}")
         st.error(f"Failed to load abstract data: {str(e)}")
         return pd.DataFrame()
 
@@ -529,7 +569,7 @@ def paper_details_fragment():
 
             # Only load abstract if paper changed (completely independent operation)
             if selected_paper != st.session_state.ui_state.get('current_selected_paper'):
-                print(f"[PAPER] Selected: {selected_paper[:50]}...")
+                logger.info(f"[PAPER] Selected: {selected_paper[:50]}...")
                 st.session_state.ui_state['current_selected_paper'] = selected_paper
                 with st.spinner("Loading paper details..."):
                     st.session_state.ui_state['current_paper_details'] = load_abstract_data(selected_paper)
@@ -748,14 +788,14 @@ def sankey_heatmap_fragment():
                     del locals()[var_name]
                     cleaned_count += 1
 
-            print(f"[POST_SANKEY_CLEANUP] Deleted {cleaned_count} variables")
+            logger.info(f"[POST_SANKEY_CLEANUP] Deleted {cleaned_count} variables")
 
             # Multiple garbage collection passes to clean up Series objects
             for i in range(5):
                 collected = gc.collect()
                 if collected == 0:
                     break
-                print(f"[POST_SANKEY_GC] Pass {i+1}: collected {collected} objects")
+                logger.debug(f"[POST_SANKEY_GC] Pass {i+1}: collected {collected} objects")
 
             log_memory("after_post_sankey_aggressive_cleanup")
             check_memory()
@@ -927,7 +967,7 @@ def debug_cache_sizes():
     """Debug function to check cache sizes"""
     try:
         # This will help us see what's in cache
-        print("[CACHE_DEBUG] Checking cache contents...")
+        logger.debug("[CACHE_DEBUG] Checking cache contents...")
         
         # Check memory by object type
         import sys
@@ -950,19 +990,19 @@ def debug_cache_sizes():
         sorted_objects = sorted(object_counts.items(), 
                             key=lambda x: x[1]['size'], reverse=True)[:10]
         
-        print(f"[MEMORY_DEBUG] Total tracked size: {total_size / 1024 / 1024:.1f} MB")
-        print("[MEMORY_DEBUG] Top 10 memory consumers:")
+        logger.info(f"[MEMORY_DEBUG] Total tracked size: {total_size / 1024 / 1024:.1f} MB")
+        logger.debug("[MEMORY_DEBUG] Top 10 memory consumers:")
         for obj_type, stats in sorted_objects:
             size_mb = stats['size'] / 1024 / 1024
-            print(f"  {obj_type}: {stats['count']} objects, {size_mb:.1f} MB")
+            logger.debug(f"  {obj_type}: {stats['count']} objects, {size_mb:.1f} MB")
         
         # Force garbage collection and check memory
         collected = gc.collect()
-        print(f"[CACHE_DEBUG] Garbage collected {collected} objects")
+        logger.debug(f"[CACHE_DEBUG] Garbage collected {collected} objects")
         log_memory("after_gc_debug")
         
     except Exception as e:
-        print(f"[CACHE_DEBUG] Error: {e}")
+        logger.error(f"[CACHE_DEBUG] Error: {e}")
 
 # Add cleanup function for main()
 def cleanup_dataframes():
@@ -986,7 +1026,7 @@ def cleanup_dataframes():
     
     # Force garbage collection
     collected = gc.collect()
-    print(f"[CLEANUP] Deleted {len(to_delete)} DataFrames, collected {collected} objects")
+    logger.info(f"[CLEANUP] Deleted {len(to_delete)} DataFrames, collected {collected} objects")
     log_memory("after_dataframe_cleanup")
 
 # Simple periodic memory check
@@ -997,20 +1037,20 @@ def check_memory():
     monitor_and_clear_cache()
 
 # App start with aggressive cache clearing
-print("=" * 50)
-print("[APP] Streamlit application starting")
+logger.info("=" * 50)
+logger.info("[APP] Streamlit application starting")
 
 # Clear all caches at startup to prevent memory buildup
 try:
     st.cache_data.clear()
     st.cache_resource.clear()
-    print("[APP] Cleared all caches at startup")
+    logger.info("[APP] Cleared all caches at startup")
 except Exception as e:
-    print(f"[APP] Cache clear error: {e}")
+    logger.error(f"[APP] Cache clear error: {e}")
 
 # Force garbage collection at startup
 collected = gc.collect()
-print(f"[APP] Garbage collected {collected} objects at startup")
+logger.info(f"[APP] Garbage collected {collected} objects at startup")
 
 log_memory("app_start_after_cleanup")
 
