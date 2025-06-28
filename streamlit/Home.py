@@ -74,17 +74,28 @@ def monitor_and_clear_cache():
             logger.warning(f"[CACHE] Clearing cache - memory at {memory_mb:.1f}MB")
             st.cache_data.clear()
             st.cache_resource.clear()
-            # clear session state to free up memory
+            
+            # Clear session state data to free up memory
+            cache_keys_to_clear = [
+                'cached_working_df', 'cached_sankey_fig', 'cached_heatmap_data',
+                'cached_heatmap_fig', 'current_working_df', 'current_paper_details'
+            ]
+            
+            for key in cache_keys_to_clear:
+                if key in st.session_state:
+                    del st.session_state[key]
+            
             if hasattr(st.session_state, 'ui_state'):
-                st.session_state.ui_state.clear()
-            if hasattr(st.session_state, 'cached_working_df'):
-                del st.session_state['cached_working_df']
-            if hasattr(st.session_state, 'cached_sankey_fig'):
-                del st.session_state['cached_sankey_fig']
-            if hasattr(st.session_state, 'cached_heatmap_data'):
-                del st.session_state['cached_heatmap_data']
+                ui_keys_to_clear = [
+                    'current_stats', 'paper_details', 'current_papers_list',
+                    'current_selected_paper', 'current_paper_details'
+                ]
+                for key in ui_keys_to_clear:
+                    if key in st.session_state.ui_state:
+                        del st.session_state.ui_state[key]
+            
             gc.collect()
-            log_memory("after_cache_clear")
+            log_memory("after_enhanced_cache_clear")
             return True
         return False
     except Exception:
@@ -361,6 +372,12 @@ def query_umap_data(doi_list):
         result['UMAP1'] = pd.to_numeric(result['UMAP1'], errors='coerce')
         result['UMAP2'] = pd.to_numeric(result['UMAP2'], errors='coerce')
         logger.info(f"[UMAP_BATCHING] Combined {len(all_results)} batches into {len(result)} total rows")
+        
+        # DELETE BATCHES AFTER CONCATENATION
+        del all_results
+        gc.collect()
+        log_memory("after_umap_batch_cleanup")
+        
         return result
     
     return pd.DataFrame()
@@ -548,6 +565,12 @@ def query_sankey_data(doi_list, filter_contexts=None, filter_study_types=None,
     if all_results:
         final_result = pd.concat(all_results, ignore_index=True)
         logger.info(f"[SANKEY_BATCHING] Combined {len(all_results)} batches into {len(final_result)} total rows")
+        
+        # DELETE BATCHES AFTER CONCATENATION
+        del all_results
+        gc.collect()
+        log_memory("after_sankey_batch_cleanup")
+        
         return final_result
     
     return pd.DataFrame()
@@ -815,6 +838,12 @@ def load_sankey():
             )
             
             st.session_state['cached_working_df'] = working_df_exploded
+            
+            # DELETE INTERMEDIATE DATA
+            del geography_df
+            gc.collect()
+            log_memory("after_sankey_intermediate_cleanup")
+            
             # Mark sankey processing as complete
             st.session_state['sankey_processing'] = False
             st.session_state['sankey_ready'] = True
@@ -916,7 +945,15 @@ def render_heatmap():
             'plot_df': plot_df,
             'topics_df': topics_df
         }
-        
+
+        # DELETE UNUSED VARIABLES
+        if 'unique_dois' in locals():
+            del unique_dois
+        if 'geography_df' in locals():
+            del geography_df
+        gc.collect()
+        log_memory("after_heatmap_data_cleanup")
+
         if 'cached_heatmap_fig' in st.session_state:
             del st.session_state['cached_heatmap_fig']
     else:
