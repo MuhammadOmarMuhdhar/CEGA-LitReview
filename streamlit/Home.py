@@ -64,72 +64,42 @@ def log_data_op(operation, rows=None):
         logger.info(f"[DATA] {operation}")
     log_memory(f"after_{operation}")
 
-def cleanup_memory(step_name="manual"):
-    """Enhanced memory cleanup with targeted clearing"""
+def monitor_and_clear_cache():
+    """Monitor memory usage and clear cache if needed"""
     try:
         process = psutil.Process()
         memory_mb = process.memory_info().rss / 1024 / 1024
         
-        logger.info(f"[CLEANUP] Starting cleanup at {memory_mb:.1f}MB - {step_name}")
-        
-        # Always run garbage collection
-        collected = gc.collect()
-        logger.info(f"[CLEANUP] Garbage collected {collected} objects")
-        
-        # Clear old cached data signatures
-        cleanup_old_signatures()
-        
-        # Clear temporary variables from session state
-        cleanup_temp_session_data()
-        
-        # Force aggressive cleanup if memory is high
         if memory_mb > 900:
-            logger.warning(f"[CLEANUP] Aggressive cleanup - memory at {memory_mb:.1f}MB")
+            logger.warning(f"[CACHE] Clearing cache - memory at {memory_mb:.1f}MB")
             st.cache_data.clear()
             st.cache_resource.clear()
-            cleanup_large_cached_objects()
-        
-        # Final memory check
-        new_memory_mb = process.memory_info().rss / 1024 / 1024
-        saved_mb = memory_mb - new_memory_mb
-        logger.info(f"[CLEANUP] Completed: {new_memory_mb:.1f}MB (saved {saved_mb:.1f}MB)")
-        
-        return saved_mb > 0
-        
-    except Exception as e:
-        logger.error(f"[CLEANUP] Error during cleanup: {e}")
+            
+            # Clear session state data to free up memory
+            cache_keys_to_clear = [
+                'cached_working_df', 'cached_sankey_fig', 'cached_heatmap_data',
+                'cached_heatmap_fig', 'current_working_df', 'current_paper_details'
+            ]
+            
+            for key in cache_keys_to_clear:
+                if key in st.session_state:
+                    del st.session_state[key]
+            
+            if hasattr(st.session_state, 'ui_state'):
+                ui_keys_to_clear = [
+                    'current_stats', 'paper_details', 'current_papers_list',
+                    'current_selected_paper', 'current_paper_details'
+                ]
+                for key in ui_keys_to_clear:
+                    if key in st.session_state.ui_state:
+                        del st.session_state.ui_state[key]
+            
+            gc.collect()
+            log_memory("after_enhanced_cache_clear")
+            return True
         return False
-
-def cleanup_old_signatures():
-    """Remove outdated data signatures from session state"""
-    signature_keys = [k for k in st.session_state.keys() if k.endswith('_signature')]
-    for key in signature_keys:
-        if key not in ['sankey_data_signature', 'heatmap_data_signature', 'sankey_chart_signature']:
-            del st.session_state[key]
-
-def cleanup_temp_session_data():
-    """Clean up temporary session data that's no longer needed"""
-    temp_keys = [
-        'temp_geo_data', 'batch_results', 'intermediate_df',
-        'old_paper_details', 'previous_selections', 'temp_stats'
-    ]
-    for key in temp_keys:
-        if key in st.session_state:
-            del st.session_state[key]
-
-def cleanup_large_cached_objects():
-    """Remove large cached objects from session state"""
-    large_object_keys = [
-        'cached_working_df', 'cached_sankey_fig', 'cached_heatmap_data', 
-        'cached_heatmap_fig', 'current_working_df'
-    ]
-    for key in large_object_keys:
-        if key in st.session_state:
-            del st.session_state[key]
-
-def monitor_and_clear_cache():
-    """Monitor memory usage and clear cache if needed"""
-    return cleanup_memory("monitor_check")
+    except Exception:
+        return False
 
 # ============================================================================
 # CONFIGURATION AND CONNECTION SETUP
@@ -222,6 +192,7 @@ def execute_bigquery(sql_query, description="query", log_rows=True, show_progres
         
         # Show progress for batch operations
         if show_progress and batch_info:
+            # progress_text = f"Processing batch {batch_info['current']}/{batch_info['total']} ({batch_info['count']} items)"
             with st.spinner(' '):
                 result = client.execute_query(sql_query)
         else:
@@ -265,12 +236,7 @@ def query_geography_data(selected_country='All', selected_institution='All'):
             WHERE {where_clause}
         """
         
-        result = execute_bigquery(query, f"geography_data_{selected_country}_{selected_institution}")
-        
-        # Cleanup after query
-        cleanup_memory("after_geography_query")
-        
-        return result
+        return execute_bigquery(query, f"geography_data_{selected_country}_{selected_institution}")
 
 def query_available_filters():
     """Query unique countries and institutions for filter dropdowns"""
@@ -307,10 +273,6 @@ def query_available_filters():
                 # Fallback for non-list format
                 inst_list = [i.strip() for i in str(row['institution']).split(',')]
                 institutions.update([i for i in inst_list if i])
-        
-        # Clean up result DataFrame immediately after processing
-        del result
-        gc.collect()
         
         return sorted(list(countries)), sorted(list(institutions))
 
@@ -390,9 +352,6 @@ def query_umap_data(doi_list):
                 all_results.append(batch_result)
             logger.info(f"[UMAP_BATCH] Batch {batch_num} completed: {len(batch_result)} rows")
             
-            # Clean up batch variables immediately
-            del batch_result, doi_list_str, batch_dois
-            
         except Exception as e:
             logger.error(f"[UMAP_BATCH] Batch {batch_num} failed: {str(e)}")
             continue
@@ -414,9 +373,10 @@ def query_umap_data(doi_list):
         result['UMAP2'] = pd.to_numeric(result['UMAP2'], errors='coerce')
         logger.info(f"[UMAP_BATCHING] Combined {len(all_results)} batches into {len(result)} total rows")
         
-        # Clean up batch results list
+        # DELETE BATCHES AFTER CONCATENATION
         del all_results
         gc.collect()
+        log_memory("after_umap_batch_cleanup")
         
         return result
     
@@ -461,7 +421,7 @@ def query_sankey_data(doi_list, filter_contexts=None, filter_study_types=None,
     
     where_clause = " AND ".join(filter_clauses) if filter_clauses else "1=1"
     
-    # Calculate maximum safe batch size automatically
+    # Calculate maximum safe batch size automatically (your original dynamic logic)
     max_query_size = 1024 * 1000  # 1MB limit in characters
     
     # Calculate base query size (everything except DOI list)
@@ -587,9 +547,6 @@ def query_sankey_data(doi_list, filter_contexts=None, filter_study_types=None,
                 all_results.append(batch_result)
             logger.info(f"[SANKEY_BATCH] Batch {batch_num} completed: {len(batch_result)} rows")
             
-            # Clean up batch variables immediately
-            del batch_result, doi_list_str, batch_dois
-            
         except Exception as e:
             logger.error(f"[SANKEY_BATCH] Batch {batch_num} failed: {str(e)}")
             # Continue with other batches instead of failing completely
@@ -609,9 +566,10 @@ def query_sankey_data(doi_list, filter_contexts=None, filter_study_types=None,
         final_result = pd.concat(all_results, ignore_index=True)
         logger.info(f"[SANKEY_BATCHING] Combined {len(all_results)} batches into {len(final_result)} total rows")
         
-        # Clean up batch results list
+        # DELETE BATCHES AFTER CONCATENATION
         del all_results
         gc.collect()
+        log_memory("after_sankey_batch_cleanup")
         
         return final_result
     
@@ -763,7 +721,7 @@ def _create_sankey_signature():
     return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 # ============================================================================
-# UPDATED SANKEY FRAGMENT WITH SEQUENCING AND MEMORY OPTIMIZATION
+# UPDATED SANKEY FRAGMENT WITH SEQUENCING
 # ============================================================================
 
 @st.fragment(run_every=10)
@@ -779,13 +737,11 @@ def load_sankey():
         st.session_state['sankey_processing'] = True
         st.session_state['sankey_ready'] = False
         logger.info("[SEQUENCE] Sankey processing started")
-        
-        # Clear old cached data when data changes
-        cleanup_large_cached_objects()
 
     # Memory cleanup only if data changed
     if data_changed:
-        cleanup_memory("sankey_data_change")
+        gc.collect()
+        log_memory("after_sankey_cleanup")
 
     # Show spinner only if data changed
     spinner_context = st.spinner("Loading Sankey Data...") if data_changed else st.empty()
@@ -883,9 +839,10 @@ def load_sankey():
             
             st.session_state['cached_working_df'] = working_df_exploded
             
-            # Clean up geography_df immediately after use
+            # DELETE INTERMEDIATE DATA
             del geography_df
             gc.collect()
+            log_memory("after_sankey_intermediate_cleanup")
             
             # Mark sankey processing as complete
             st.session_state['sankey_processing'] = False
@@ -911,9 +868,6 @@ def load_sankey():
                 )
                 st.session_state['cached_sankey_fig'] = sankey_fig
                 st.session_state['sankey_chart_signature'] = chart_signature
-                
-                # Clean up temporary objects
-                del filters, sankey_diagram
             
             # Always use the cached figure with a stable key
             st.plotly_chart(
@@ -927,7 +881,7 @@ def load_sankey():
             st.session_state['current_working_df'] = None
 
 # ============================================================================
-# UPDATED HEATMAP FRAGMENT WITH DEPENDENCY WAITING AND MEMORY OPTIMIZATION
+# UPDATED HEATMAP FRAGMENT WITH DEPENDENCY WAITING
 # ============================================================================
 
 @st.fragment(run_every=10)
@@ -960,12 +914,6 @@ def render_heatmap():
     if data_changed:
         st.session_state['heatmap_data_signature'] = current_signature
         logger.info("[SEQUENCE] Heatmap data changed, regenerating...")
-        
-        # Clear old heatmap cache when data changes
-        if 'cached_heatmap_data' in st.session_state:
-            del st.session_state['cached_heatmap_data']
-        if 'cached_heatmap_fig' in st.session_state:
-            del st.session_state['cached_heatmap_fig']
 
     # Get heatmap data only if changed
     if data_changed or 'cached_heatmap_data' not in st.session_state:
@@ -989,10 +937,6 @@ def render_heatmap():
             )
             unique_dois = geography_df['doi'].tolist()
             logger.info(f"[SEQUENCE] Using geography-filtered DOIs: {len(unique_dois)}")
-            
-            # Clean up geography_df immediately
-            del geography_df
-            gc.collect()
         
         plot_df = query_umap_data(unique_dois)
         topics_df = query_topics_data()
@@ -1001,10 +945,17 @@ def render_heatmap():
             'plot_df': plot_df,
             'topics_df': topics_df
         }
-        
-        # Clean up temporary variables
-        del unique_dois
-        
+
+        # DELETE UNUSED VARIABLES
+        if 'unique_dois' in locals():
+            del unique_dois
+        if 'geography_df' in locals():
+            del geography_df
+        gc.collect()
+        log_memory("after_heatmap_data_cleanup")
+
+        if 'cached_heatmap_fig' in st.session_state:
+            del st.session_state['cached_heatmap_fig']
     else:
         cached_data = st.session_state.get('cached_heatmap_data', {})
         plot_df = cached_data.get('plot_df', pd.DataFrame())
@@ -1022,9 +973,6 @@ def render_heatmap():
                 with st.spinner("Generating research landscape visualization..."):
                     heatmap_fig = heatMap.heatmap(plot_df, topics_df)
                     st.session_state['cached_heatmap_fig'] = heatmap_fig.draw()
-                    
-                    # Clean up temporary heatmap object
-                    del heatmap_fig
             
             st.plotly_chart(st.session_state['cached_heatmap_fig'], use_container_width=True)
         else:
@@ -1135,11 +1083,6 @@ def paper_details_fragment():
             if selected_paper != st.session_state.ui_state.get('current_selected_paper'):
                 logger.info(f"[PAPER] Selected: {selected_paper[:50]}...")
                 st.session_state.ui_state['current_selected_paper'] = selected_paper
-                
-                # Clear old paper details
-                if 'current_paper_details' in st.session_state.ui_state:
-                    del st.session_state.ui_state['current_paper_details']
-                
                 with st.spinner("Loading paper details..."):
                     st.session_state.ui_state['current_paper_details'] = query_paper_details(selected_paper)
                 log_memory("after_paper_selection")
@@ -1208,12 +1151,11 @@ def paper_details_fragment():
             st.write("No papers available for visualization with current filters.")
 
 # ============================================================================
-# MAIN APPLICATION WITH SEQUENCING AND ENHANCED MEMORY MANAGEMENT
+# MAIN APPLICATION WITH SEQUENCING INITIALIZATION
 # ============================================================================
 
 def main():  
-    # Enhanced startup memory management
-    cleanup_memory("app_startup")
+    monitor_and_clear_cache()
 
     # Test database connection
     try: 
@@ -1348,8 +1290,6 @@ def main():
                     st.session_state.ui_state['stats_computed'] = False
                     # Reset sequencing when geography changes
                     st.session_state['sankey_ready'] = False
-                    # Clear cached data when geography changes
-                    cleanup_large_cached_objects()
                     logger.info("[SEQUENCE] Geography filter changed - resetting sequence")
 
                 with col4:
@@ -1366,10 +1306,6 @@ def main():
                                 inst_list = [i.strip() for i in str(row['institution']).split(',')]
                                 filtered_institutions.update([i for i in inst_list if i])
                         institutions_list = sorted(list(filtered_institutions))
-                        
-                        # Clean up temp data immediately
-                        del temp_geo_data, filtered_institutions
-                        gc.collect()
                     else:
                         institutions_list = all_institutions
                     
@@ -1394,8 +1330,6 @@ def main():
                     st.session_state.ui_state['stats_computed'] = False
                     # Reset sequencing when geography changes
                     st.session_state['sankey_ready'] = False
-                    # Clear cached data when geography changes
-                    cleanup_large_cached_objects()
                     logger.info("[SEQUENCE] Institution filter changed - resetting sequence")
             
             # Get working data for statistics
@@ -1426,10 +1360,6 @@ def main():
                     'institutions_count': institutions_count
                 }
                 st.session_state.ui_state['stats_computed'] = True
-                
-                # Clean up working_df after stats calculation
-                del working_df
-                gc.collect()
             
             stats = st.session_state.ui_state['current_stats']
             
@@ -1479,10 +1409,6 @@ def main():
                         for inst, count in institution_counts.most_common(10)
                     ])
 
-                    # Clean up temporary variables
-                    del working_df, all_institutions_in_filtered, institution_counts
-                    gc.collect()
-
                     st.markdown("###### Research Institutions - Number of Publications")
                     if not top_institutions.empty:
                         institution_figure = bar.create(
@@ -1494,14 +1420,8 @@ def main():
                             height=345
                         )
                         st.plotly_chart(institution_figure, use_container_width=True)
-                        
-                        # Clean up figure object
-                        del institution_figure
                     else:
                         st.write("No data available for selected filters.")
-                    
-                    # Clean up dataframe
-                    del top_institutions
 
         st.markdown("#### Connecting Poverty Context, Psychological Mechanisms and Behavior")
         st.markdown("""
@@ -1521,14 +1441,15 @@ def main():
         # Heatmap section - WAITS FOR SANKEY TO COMPLETE
         render_heatmap()
 
-        # Final cleanup at end of main function
-        cleanup_memory("main_function_exit")
+        # Cleanup
+        gc.collect()
+        log_memory("main_function_exit")
 
 # ============================================================================
-# APP STARTUP WITH ENHANCED MEMORY MANAGEMENT
+# APP STARTUP
 # ============================================================================
 
-# App startup with enhanced cache clearing
+# App startup with cache clearing
 logger.info("=" * 50)
 logger.info("[APP] Streamlit application starting")
 
@@ -1539,8 +1460,9 @@ try:
 except Exception as e:
     logger.error(f"[APP] Cache clear error: {e}")
 
-# Enhanced startup cleanup
-cleanup_memory("app_startup_full")
+collected = gc.collect()
+logger.info(f"[APP] Garbage collected {collected} objects at startup")
+log_memory("app_start_after_cleanup")
 
 if __name__ == "__main__":
     main()
