@@ -86,13 +86,16 @@ def monitor_and_clear_cache():
                     del st.session_state[key]
             
             if hasattr(st.session_state, 'ui_state'):
+                # ONLY clear large data objects, NOT essential state
                 ui_keys_to_clear = [
-                    'current_stats', 'paper_details', 'current_papers_list',
-                    'current_selected_paper', 'current_paper_details'
+                    'paper_details', 'current_papers_list', 'current_paper_details'
                 ]
                 for key in ui_keys_to_clear:
                     if key in st.session_state.ui_state:
                         del st.session_state.ui_state[key]
+                
+                # Reset flags that depend on cleared data
+                st.session_state.ui_state['stats_computed'] = False
             
             gc.collect()
             log_memory("after_enhanced_cache_clear")
@@ -724,7 +727,7 @@ def _create_sankey_signature():
 # UPDATED SANKEY FRAGMENT WITH SEQUENCING
 # ============================================================================
 
-@st.fragment(run_every=10)
+@st.fragment(run_every=5)
 def load_sankey():
     """Loads and displays the Sankey diagram - RUNS FIRST"""
     current_signature = _create_sankey_signature()
