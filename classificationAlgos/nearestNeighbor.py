@@ -19,6 +19,7 @@ def classify(
     examples,
     n_neighbors: int = 2,
     confidence_threshold: float = 0.2,
+    batch_size: int = 1000,
 ) -> List[Dict]:
     try:
         # Prepare examples
@@ -35,38 +36,60 @@ def classify(
         # Fit the model
         knn.fit(example_embeddings, example_labels)
         
-        # final papers
+        # Final papers
         papers = []
         
-        # check if each paper matches a label
-        for item in texts:
-            # Extract the text and embedding
-            embedding = item['embedding'] if 'embedding' in item else None
+        # Process texts in batches
+        total_texts = len(texts)
+        logger.info(f"Processing {total_texts} texts in batches of {batch_size}")
+        
+        for batch_start in range(0, total_texts, batch_size):
+            batch_end = min(batch_start + batch_size, total_texts)
+            batch_texts = texts[batch_start:batch_end]
             
-            # turn the embedding into a list
-            embedding = embedding.tolist() if isinstance(embedding, np.ndarray) else embedding
+            logger.info(f"Processing batch {batch_start//batch_size + 1}/{(total_texts + batch_size - 1)//batch_size} "
+                       f"(items {batch_start + 1}-{batch_end})")
             
-            # classify the paper
-            if embedding is not None:
-                # Reshape embedding for sklearn if needed
-                embedding_array = np.array([embedding])
-                
-                # Get predictions and confidence scores
-                predicted_label = knn.predict(embedding_array)[0]
-                probabilities = knn.predict_proba(embedding_array)[0]
-                confidence = np.max(probabilities)
-                
+            # Extract embeddings for the batch
+            batch_embeddings = []
+            batch_items = []
+            
+            for item in batch_texts:
+                embedding = item['embedding'] if 'embedding' in item else None
+                if embedding is not None:
+                    # Convert embedding to list if it's a numpy array
+                    embedding = embedding.tolist() if isinstance(embedding, np.ndarray) else embedding
+                    batch_embeddings.append(embedding)
+                    batch_items.append(item)
+            
+            if not batch_embeddings:
+                logger.warning(f"No valid embeddings found in batch {batch_start//batch_size + 1}")
+                continue
+            
+            # Convert to numpy array for batch prediction
+            embeddings_array = np.array(batch_embeddings)
+            
+            # Get predictions and confidence scores for the entire batch
+            predicted_labels = knn.predict(embeddings_array)
+            probabilities = knn.predict_proba(embeddings_array)
+            confidences = np.max(probabilities, axis=1)
+            
+            # Process results for this batch
+            batch_papers = []
+            for i, (item, predicted_label, confidence) in enumerate(zip(batch_items, predicted_labels, confidences)):
                 # Only keep papers above the confidence threshold
                 if confidence >= confidence_threshold:
                     # Add relevant info to the paper
                     item['predicted_label'] = predicted_label
                     item['confidence'] = float(confidence)  # Convert numpy float to Python float
-                    
-                    # Add to final papers list
-                    papers.append(item)
+                    batch_papers.append(item)
+            
+            papers.extend(batch_papers)
+            logger.info(f"Batch {batch_start//batch_size + 1}: classified {len(batch_items)} items, "
+                       f"kept {len(batch_papers)} above threshold {confidence_threshold}")
         
-        logger.info(f"Classified {len(texts)} papers, kept {len(papers)} above threshold {confidence_threshold}")
-        
+        logger.info(f"Classification complete: processed {total_texts} texts, "
+                   f"kept {len(papers)} above threshold {confidence_threshold}")
         return papers
         
     except Exception as e:
