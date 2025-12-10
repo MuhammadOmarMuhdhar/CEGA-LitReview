@@ -72,6 +72,34 @@ class Client:
             # Force garbage collection
             gc.collect()
     
+    @contextmanager
+    def _managed_load_job(self, table_ref, job_config=None):
+        """Context manager for load jobs with automatic cleanup"""
+        job = None
+        try:
+            job = self.client.load_table_from_dataframe(
+                dataframe=None,  # Will be set by caller
+                destination=table_ref,
+                job_config=job_config
+            )
+            self._active_jobs.add(job)  # Track with weak reference
+            yield job
+        finally:
+            # EXPLICIT CLEANUP
+            if job:
+                try:
+                    # Cancel job if still running
+                    if hasattr(job, 'cancel') and job.state in ['PENDING', 'RUNNING']:
+                        job.cancel()
+                except Exception:
+                    pass
+                
+                # Clear job reference
+                job = None
+            
+            # Force garbage collection
+            gc.collect()
+    
     def _cleanup_jobs(self):
         """Manually cleanup any remaining job references"""
         try:
@@ -130,6 +158,216 @@ class Client:
             self.logger.info("Client unhealthy, refreshing connection")
             self._refresh_client()
         return self.client
+    
+    def _sanitize_dataframe(self, df):
+        """Sanitize entire dataframe for BigQuery upload"""
+        self.logger.info(f"Sanitizing DataFrame with shape: {df.shape}")
+        
+        try:
+            # Create a copy to avoid modifying original
+            df_clean = df.copy()
+            
+            # Apply sanitization to each column
+            for col in df_clean.columns:
+                self.logger.debug(f"Sanitizing column: {col}")
+                df_clean[col] = df_clean[col].apply(self._sanitize_cell_value)
+            
+            # Clean column names for BigQuery
+            df_clean.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)) for col in df_clean.columns]
+            
+            self.logger.info(f"DataFrame sanitization completed")
+            return df_clean
+            
+        except Exception as e:
+            self.logger.error(f"Error sanitizing DataFrame: {e}")
+            raise
+    
+    def append(self, dataframe, dataset_id, table_id, create_if_not_exists=True, 
+                       chunk_size=None, max_retries=3):
+        """
+        Append data to an existing BigQuery table with memory management
+        
+        Args:
+            dataframe: pandas DataFrame to append
+            dataset_id: BigQuery dataset ID
+            table_id: BigQuery table ID
+            create_if_not_exists: Create table if it doesn't exist
+            chunk_size: Size of chunks for large DataFrames (default: self.batch_size)
+            max_retries: Maximum number of retry attempts
+        """
+        self.logger.info(f"Starting append operation - Dataset: {dataset_id}, Table: {table_id}")
+        
+        if chunk_size is None:
+            chunk_size = self.batch_size
+        
+        try:
+            # Ensure we have a healthy client
+            client = self.get_healthy_client()
+            
+            # Sanitize the dataframe
+            df_clean = self._sanitize_dataframe(dataframe)
+            
+            # Get table reference
+            table_ref = client.dataset(dataset_id).table(table_id)
+            
+            # Check if table exists
+            try:
+                table = client.get_table(table_ref)
+                self.logger.info(f"Table exists with {table.num_rows} rows")
+            except Exception as e:
+                if create_if_not_exists:
+                    self.logger.info(f"Table doesn't exist, will be created: {e}")
+                else:
+                    raise Exception(f"Table doesn't exist and create_if_not_exists=False: {e}")
+            
+            # Configure job for append
+            job_config = bigquery.LoadJobConfig(
+                write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+                autodetect=True,
+                source_format=bigquery.SourceFormat.PARQUET  # More efficient than CSV
+            )
+            
+            # Process in chunks for memory efficiency
+            total_rows = len(df_clean)
+            rows_processed = 0
+            
+            for start_idx in range(0, total_rows, chunk_size):
+                end_idx = min(start_idx + chunk_size, total_rows)
+                chunk = df_clean.iloc[start_idx:end_idx].copy()
+                
+                self.logger.info(f"Processing chunk {start_idx}-{end_idx} of {total_rows}")
+                
+                # Retry mechanism for each chunk
+                for attempt in range(max_retries):
+                    try:
+                        # Load chunk to BigQuery
+                        job = client.load_table_from_dataframe(
+                            chunk, table_ref, job_config=job_config
+                        )
+                        self._active_jobs.add(job)
+                        
+                        # Wait for job completion
+                        job.result()
+                        
+                        rows_processed += len(chunk)
+                        self.logger.info(f"Successfully appended chunk. Total rows processed: {rows_processed}")
+                        break
+                        
+                    except Exception as e:
+                        self.logger.warning(f"Attempt {attempt + 1} failed for chunk {start_idx}-{end_idx}: {e}")
+                        if attempt == max_retries - 1:
+                            raise Exception(f"Failed to append chunk after {max_retries} attempts: {e}")
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                
+                # Clean up chunk
+                del chunk
+                gc.collect()
+            
+            self.logger.info(f"Append operation completed. Total rows appended: {rows_processed}")
+            
+        except Exception as e:
+            self.logger.error(f"Error appending to table: {e}")
+            raise
+        finally:
+            # Clean up
+            if 'df_clean' in locals():
+                del df_clean
+            gc.collect()
+    
+    def replace(self, dataframe, dataset_id, table_id, chunk_size=None, max_retries=3):
+        """
+        Replace an entire BigQuery table with new data
+        
+        Args:
+            dataframe: pandas DataFrame to replace table with
+            dataset_id: BigQuery dataset ID
+            table_id: BigQuery table ID
+            chunk_size: Size of chunks for large DataFrames (default: self.batch_size)
+            max_retries: Maximum number of retry attempts
+        """
+        self.logger.info(f"Starting replace operation - Dataset: {dataset_id}, Table: {table_id}")
+        
+        if chunk_size is None:
+            chunk_size = self.batch_size
+        
+        try:
+            # Ensure we have a healthy client
+            client = self.get_healthy_client()
+            
+            # Sanitize the dataframe
+            df_clean = self._sanitize_dataframe(dataframe)
+            
+            # Get table reference
+            table_ref = client.dataset(dataset_id).table(table_id)
+            
+            # Configure job for replace (first chunk)
+            job_config_replace = bigquery.LoadJobConfig(
+                write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,  # Replace existing data
+                autodetect=True,
+                source_format=bigquery.SourceFormat.PARQUET
+            )
+            
+            # Configure job for append (subsequent chunks)
+            job_config_append = bigquery.LoadJobConfig(
+                write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+                autodetect=True,
+                source_format=bigquery.SourceFormat.PARQUET
+            )
+            
+            # Process in chunks for memory efficiency
+            total_rows = len(df_clean)
+            rows_processed = 0
+            is_first_chunk = True
+            
+            for start_idx in range(0, total_rows, chunk_size):
+                end_idx = min(start_idx + chunk_size, total_rows)
+                chunk = df_clean.iloc[start_idx:end_idx].copy()
+                
+                self.logger.info(f"Processing chunk {start_idx}-{end_idx} of {total_rows}")
+                
+                # Use appropriate job config
+                current_job_config = job_config_replace if is_first_chunk else job_config_append
+                
+                # Retry mechanism for each chunk
+                for attempt in range(max_retries):
+                    try:
+                        # Load chunk to BigQuery
+                        job = client.load_table_from_dataframe(
+                            chunk, table_ref, job_config=current_job_config
+                        )
+                        self._active_jobs.add(job)
+                        
+                        # Wait for job completion
+                        job.result()
+                        
+                        rows_processed += len(chunk)
+                        chunk_action = "replaced" if is_first_chunk else "appended"
+                        self.logger.info(f"Successfully {chunk_action} chunk. Total rows processed: {rows_processed}")
+                        break
+                        
+                    except Exception as e:
+                        self.logger.warning(f"Attempt {attempt + 1} failed for chunk {start_idx}-{end_idx}: {e}")
+                        if attempt == max_retries - 1:
+                            raise Exception(f"Failed to process chunk after {max_retries} attempts: {e}")
+                        time.sleep(2 ** attempt)  # Exponential backoff
+                
+                # After first chunk, switch to append mode
+                is_first_chunk = False
+                
+                # Clean up chunk
+                del chunk
+                gc.collect()
+            
+            self.logger.info(f"Replace operation completed. Total rows in new table: {rows_processed}")
+            
+        except Exception as e:
+            self.logger.error(f"Error replacing table: {e}")
+            raise
+        finally:
+            # Clean up
+            if 'df_clean' in locals():
+                del df_clean
+            gc.collect()
     
     def execute_query(self, query, use_storage_api=True):
         """Execute query with proper memory management"""
@@ -252,31 +490,6 @@ class Client:
         finally:
             gc.collect()
     
-    def read_fast(self, dataset_id, table_id, query=None):
-        """Fast read with memory management"""
-        try:
-            if query:
-                sql_query = query
-            else:
-                sql_query = f"SELECT * FROM `{self.project_id}.{dataset_id}.{table_id}`"
-            
-            with self._managed_query_job(sql_query) as job:
-                try:
-                    df = job.to_dataframe(create_bqstorage_client=True)
-                except Exception as e:
-                    self.logger.warning(f"Storage API failed, using standard API: {e}")
-                    df = job.to_dataframe()
-                
-                # Return copy to break job references
-                return df.copy()
-                
-        except Exception as e:
-            self.logger.error(f"Error in fast read: {str(e)}")
-            raise
-        finally:
-            gc.collect()
-    
-    # Rest of your methods with similar patterns...
     def _sanitize_cell_value(self, value):
         """Comprehensive sanitization of individual cell values for BigQuery"""
         # Handle None/NaN/null values
