@@ -2,6 +2,9 @@ from sentence_transformers import SentenceTransformer
 from umap import UMAP
 import torch
 import numpy as np
+import pickle
+import os
+import tensorflow as tf
 
 def run(papers,
         model_name='all-MiniLM-L6-v2',
@@ -10,21 +13,25 @@ def run(papers,
         random_state=42,
         min_dist=0.1,
         n_neighbors=15,
-        device=None):
+        device=None,
+        umap_model_path=None,
+        use_parametric=False,
+        skip_embedding=False):
     """
     Efficiently encode abstracts in batches using sentence transformers,
-    and add UMAP dimensionality reduction.
+    and add UMAP dimensionality reduction using either standard UMAP or saved Parametric UMAP.
     
     Parameters:
     -----------
     papers : list of dict
         List of paper dictionaries, each containing at least an 'abstract' key
+        If skip_embedding=True, should contain 'embedding' key instead
     model_name : str, optional
         Name of the SentenceTransformer model to use (default: 'all-MiniLM-L6-v2')
     batch_size : int, optional
         Number of abstracts to process in each batch (default: 32)
     umap_components : int, optional
-        Number of dimensions for UMAP reduction (default: 5)
+        Number of dimensions for UMAP reduction (default: 2)
     random_state : int, optional
         Random seed for UMAP for reproducibility (default: 42)
     min_dist : float, optional
@@ -34,76 +41,144 @@ def run(papers,
     device : str, optional
         Device to run the model on ('cpu', 'cuda', 'mps', etc.)
         If None, will use CUDA if available, otherwise CPU
+    umap_model_path : str, optional
+        Path to saved Parametric UMAP model (e.g., 'data/umap_model/model.pkl')
+        If provided, will load and use this trained model instead of creating new one
+    use_parametric : bool, optional
+        Whether to use parametric UMAP. If True and umap_model_path is None, 
+        will create new parametric UMAP (default: False)
+    skip_embedding : bool, optional
+        If True, skip embedding calculation and use existing 'embedding' field from papers.
+        Useful when papers already contain precomputed embeddings (default: False)
         
     Returns:
     --------
     list of dict
         The input papers with 'embedding' and 'umap_embedding' fields added to each paper that has an abstract
     """
-    # Load model
-    model = SentenceTransformer(model_name)
     
-    # Set device if specified
-    if device:
-        model = model.to(device)
-    
-    # Extract abstracts (skipping None or empty abstracts)
-    valid_indices = []
-    abstracts_to_encode = []
-    
-    for i, paper in enumerate(papers):
-        abstract = paper.get('abstract')
-        if abstract and isinstance(abstract, str) and abstract.strip():
-            valid_indices.append(i)
-            abstracts_to_encode.append(abstract)
-    
-    # Process abstracts in batches to get original embeddings
-    original_embeddings = []
-    
-    for i in range(0, len(abstracts_to_encode), batch_size):
-        batch = abstracts_to_encode[i:i+batch_size]
-        batch_embeddings = model.encode(
-            batch, 
-            convert_to_tensor=True, 
-            normalize_embeddings=True,
-            show_progress_bar=False
-        )
+    if skip_embedding:
+        # Use existing embeddings
+        valid_indices = []
+        all_embeddings = []
         
-        # Convert to numpy for storage
-        if isinstance(batch_embeddings, torch.Tensor):
-            batch_embeddings_np = batch_embeddings.cpu().numpy()
+        for i, paper in enumerate(papers):
+            embedding = paper.get('embedding')
+            if embedding is not None:
+                valid_indices.append(i)
+                # Convert to numpy array if it's a list
+                if isinstance(embedding, list):
+                    embedding_np = np.array(embedding)
+                else:
+                    embedding_np = embedding
+                all_embeddings.append(embedding_np)
+        
+        if all_embeddings:
+            all_embeddings = np.vstack(all_embeddings)
+            print(f"✅ Using existing embeddings for {len(all_embeddings)} papers")
         else:
-            batch_embeddings_np = np.array(batch_embeddings)
+            print("⚠️  No valid embeddings found in papers. Please check your data.")
+            return papers
+    else:
+        # Calculate new embeddings (original behavior)
+        # Load sentence transformer model
+        model = SentenceTransformer(model_name)
+        
+        # Set device if specified
+        if device:
+            model = model.to(device)
+        
+        # Extract abstracts (skipping None or empty abstracts)
+        valid_indices = []
+        abstracts_to_encode = []
+        
+        for i, paper in enumerate(papers):
+            abstract = paper.get('abstract')
+            if abstract and isinstance(abstract, str) and abstract.strip():
+                valid_indices.append(i)
+                abstracts_to_encode.append(abstract)
+        
+        # Process abstracts in batches to get original embeddings
+        original_embeddings = []
+        
+        for i in range(0, len(abstracts_to_encode), batch_size):
+            batch = abstracts_to_encode[i:i+batch_size]
+            batch_embeddings = model.encode(
+                batch, 
+                convert_to_tensor=True, 
+                normalize_embeddings=True,
+                show_progress_bar=False
+            )
             
-        original_embeddings.append(batch_embeddings_np)
+            # Convert to numpy for storage
+            if isinstance(batch_embeddings, torch.Tensor):
+                batch_embeddings_np = batch_embeddings.cpu().numpy()
+            else:
+                batch_embeddings_np = np.array(batch_embeddings)
+                
+            original_embeddings.append(batch_embeddings_np)
+        
+        # Combine all batches
+        if original_embeddings:
+            all_embeddings = np.vstack(original_embeddings)
+            
+            # Store embeddings in papers if we calculated them
+            original_embeddings_list = all_embeddings.tolist()
+            for idx, paper_idx in enumerate(valid_indices):
+                papers[paper_idx]['embedding'] = original_embeddings_list[idx]
+        else:
+            print("⚠️  No valid abstracts found for embedding.")
+            return papers
     
-    # Combine all batches
-    if original_embeddings:
-        all_embeddings = np.vstack(original_embeddings)
+    # Apply UMAP dimensionality reduction
+    if len(all_embeddings) > 0:
+        # Choose UMAP approach based on parameters
+        if umap_model_path and os.path.exists(umap_model_path):
+            # Load saved Parametric UMAP model
+            print(f"Loading saved Parametric UMAP model from: {umap_model_path}")
+            try:
+                import tensorflow.compat.v1 as tf_v1
+                tf_v1.disable_v2_behavior()
+                umap_instance = tf.keras.models.load_model(umap_model_path, compile=False)
+            except:
+                print("Legacy loading failed, please retrain the model")
+            
+            # Transform using the loaded model
+            umap_embeddings = umap_instance.transform(all_embeddings)
+            print(f"✅ Applied saved Parametric UMAP to {len(all_embeddings)} embeddings")
+            
+        elif use_parametric:
+            # Create new Parametric UMAP
+            print("Creating new Parametric UMAP...")
+            from umap.parametric_umap import ParametricUMAP
+            
+            umap_instance = ParametricUMAP(
+                n_components=umap_components,
+                random_state=random_state,
+                min_dist=min_dist,
+                n_neighbors=n_neighbors,
+                batch_size=min(batch_size, 128)  # Use smaller batch for memory efficiency
+            )
+            umap_embeddings = umap_instance.fit_transform(all_embeddings)
+            print(f"✅ Created new Parametric UMAP for {len(all_embeddings)} embeddings")
+            
+        else:
+            # Use standard UMAP (original behavior)
+            print("Using standard UMAP...")
+            umap_instance = UMAP(
+                n_components=umap_components,
+                random_state=random_state,
+                min_dist=min_dist,
+                n_neighbors=n_neighbors
+            )
+            umap_embeddings = umap_instance.fit_transform(all_embeddings)
+            print(f"✅ Applied standard UMAP to {len(all_embeddings)} embeddings")
         
-        # Apply UMAP transformation to the combined embeddings
-        umap_instance = UMAP(
-            n_components=umap_components,
-            random_state=random_state,
-            min_dist=min_dist,
-            n_neighbors=n_neighbors
-        )
-        umap_embeddings = umap_instance.fit_transform(all_embeddings)
-        
-        # Convert both embeddings to list format
-        original_embeddings_list = all_embeddings.tolist()
+        # Convert UMAP embeddings to list format and assign to papers
         umap_embeddings_list = umap_embeddings.tolist()
         
-        # Assign both embeddings back to papers
         for idx, paper_idx in enumerate(valid_indices):
-            papers[paper_idx]['embedding'] = original_embeddings_list[idx]
             papers[paper_idx]['UMAP1'] = umap_embeddings_list[idx][0]
             papers[paper_idx]['UMAP2'] = umap_embeddings_list[idx][1]
     
     return papers
-
-# Example usage:
-# paper_samples = [{'title': 'Paper 1', 'abstract': 'This is the first abstract.'},
-#                  {'title': 'Paper 2', 'abstract': None},
-#                  {'title': 'Paper 3', 'abstract': 'This is the third abstract.'}]
-# processed_papers = run(paper_samples)
