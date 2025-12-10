@@ -739,6 +739,7 @@ def load_sankey():
         # Mark that sankey is processing
         st.session_state['sankey_processing'] = True
         st.session_state['sankey_ready'] = False
+        st.session_state['sankey_display_complete'] = False
         logger.info("[SEQUENCE] Sankey processing started")
 
     # Memory cleanup only if data changed
@@ -847,15 +848,8 @@ def load_sankey():
             gc.collect()
             log_memory("after_sankey_intermediate_cleanup")
             
-            # Mark sankey processing as complete
-            st.session_state['sankey_processing'] = False
-            st.session_state['sankey_ready'] = True
-            logger.info("[SEQUENCE] Sankey processing completed")
         else:
             working_df_exploded = st.session_state.get('cached_working_df', pd.DataFrame())
-            # Ensure sankey is marked as ready even when data hasn't changed
-            st.session_state['sankey_ready'] = True
-            st.session_state['sankey_processing'] = False
 
         # Create and display Sankey diagram - only if chart needs update
         if not working_df_exploded.empty:
@@ -879,15 +873,26 @@ def load_sankey():
                 key="sankey_chart_stable"
             )
             st.session_state['current_working_df'] = working_df_exploded
+            
+            
+            # Mark sankey processing as complete AFTER chart is rendered
+            st.session_state['sankey_processing'] = False
+            st.session_state['sankey_ready'] = True
+            st.session_state['sankey_display_complete'] = True
+            logger.info("[SEQUENCE] Sankey processing completed")
         else:
             st.write("No data available for selected filters.")
             st.session_state['current_working_df'] = None
+            # Still mark as ready even with no data
+            st.session_state['sankey_processing'] = False
+            st.session_state['sankey_ready'] = True
+            st.session_state['sankey_display_complete'] = True
 
 # ============================================================================
 # UPDATED HEATMAP FRAGMENT WITH DEPENDENCY WAITING
 # ============================================================================
 
-@st.fragment(run_every=10)
+@st.fragment(run_every=5)
 def render_heatmap():
     """Renders the heatmap section - WAITS FOR SANKEY TO COMPLETE"""
     
@@ -899,6 +904,16 @@ def render_heatmap():
     # Check if sankey is still processing
     if st.session_state.get('sankey_processing', False):
         st.info("🔄 Processing filters...")
+        return
+    
+    # NEW: Verify actual sankey data exists
+    if st.session_state.get('current_working_df') is None:
+        st.info("🔄 Waiting for filter data...")
+        return
+    
+    # ADDITIONAL: Wait for Sankey display to be complete
+    if not st.session_state.get('sankey_display_complete', False):
+        st.info("🔄 Sankey loading...")
         return
     
     logger.info("[SEQUENCE] Heatmap processing started")
@@ -1191,6 +1206,7 @@ def main():
     if 'sankey_ready' not in st.session_state:
         st.session_state['sankey_ready'] = False
         st.session_state['sankey_processing'] = False
+        st.session_state['sankey_display_complete'] = False
         logger.info("[SEQUENCE] Sequencing state initialized")
 
     # Header
@@ -1293,6 +1309,7 @@ def main():
                     st.session_state.ui_state['stats_computed'] = False
                     # Reset sequencing when geography changes
                     st.session_state['sankey_ready'] = False
+                    st.session_state['sankey_display_complete'] = False
                     logger.info("[SEQUENCE] Geography filter changed - resetting sequence")
 
                 with col4:
@@ -1333,6 +1350,7 @@ def main():
                     st.session_state.ui_state['stats_computed'] = False
                     # Reset sequencing when geography changes
                     st.session_state['sankey_ready'] = False
+                    st.session_state['sankey_display_complete'] = False
                     logger.info("[SEQUENCE] Institution filter changed - resetting sequence")
             
             # Get working data for statistics
