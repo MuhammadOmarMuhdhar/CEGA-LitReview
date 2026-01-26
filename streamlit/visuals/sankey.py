@@ -6,6 +6,7 @@ from functools import lru_cache
 import hashlib
 from typing import Dict, List, Optional, Any
 import numpy as np
+import logging
 
 
 class Sankey:
@@ -18,14 +19,12 @@ class Sankey:
         self.default_colors = default_colors or px.colors.qualitative.Vivid
         self.mappers = None
         
-        # Enhanced caching system
         self._preprocessed_data = None
         self._preprocessed_hash = None
         self._filter_cache = {}
         self._aggregation_cache = {}
         self._node_cache = {}
         
-        # Pre-computed data for faster filtering
         self._value_counts_cache = {}
         self._unique_values_cache = {}
         
@@ -66,7 +65,6 @@ class Sankey:
         if not self.mappers or col_name not in self.mappers:
             return None
         
-        # Pre-compute all possible mappings for this column and level
         mapper = self.mappers[col_name]
         return lambda x: mapper(x, detail_level)
     
@@ -78,55 +76,47 @@ class Sankey:
         if self._preprocessed_hash == current_hash and self._preprocessed_data is not None:
             return self._preprocessed_data
         
-        # Reset caches when base data changes
         self._filter_cache.clear()
         self._aggregation_cache.clear()
         self._node_cache.clear()
         self._value_counts_cache.clear()
         self._unique_values_cache.clear()
         
-        # Efficient preprocessing
         existing_columns = [col for col in columns_to_show if col in df.columns]
         result_df = df[existing_columns].copy()
         
-        # Vectorized operations for better performance
         exclude_values = {'Insufficient info'}
-        
-        # Single pass for all exclusions
+
+        is_aggregated = 'count' in df.columns
+
         mask = pd.Series(True, index=result_df.index)
-        
+
         for col in existing_columns:
             col_mask = (
-                result_df[col].notna() & 
+                result_df[col].notna() &
                 ~result_df[col].isin(exclude_values)
             )
             mask &= col_mask
+
             
-            # FIXED: Handle categorical columns for value counting
-            if col in ['poverty_context', 'mechanism', 'study_type']:
-                # Convert categorical to string temporarily for value_counts
+            if col in ['poverty_context', 'mechanism', 'study_type'] and not is_aggregated:
                 if result_df[col].dtype.name == 'category':
                     col_series = result_df[col].astype(str)
                 else:
                     col_series = result_df[col]
-                    
+
                 value_counts = col_series.value_counts()
                 self._value_counts_cache[col] = value_counts
-                
-                # Apply the > 2 filter using string comparison
+
                 mask &= col_series.map(value_counts) > 2
             
-            # Cache unique values - handle categoricals
             if result_df[col].dtype.name == 'category':
                 self._unique_values_cache[col] = result_df[col].cat.categories.tolist()
             else:
                 self._unique_values_cache[col] = result_df[col].unique()
         
         result_df = result_df[mask]
-        
-        # Keep categorical columns as categorical (don't convert back to object)
-        # This preserves the memory benefits
-        
+                
         self._preprocessed_data = result_df
         self._preprocessed_hash = current_hash
         
@@ -137,13 +127,11 @@ class Sankey:
         if not filters:
             return df
         
-        # Create cache key
         filter_key = self._create_stable_hash(df.shape, tuple(sorted(filters.items())))
         
         if filter_key in self._filter_cache:
             return self._filter_cache[filter_key]
         
-        # Apply filters using vectorized operations
         mask = pd.Series(True, index=df.index)
         
         filter_mapping = {
@@ -157,12 +145,10 @@ class Sankey:
             if filter_values and filter_name in filter_mapping:
                 col_name = filter_mapping[filter_name]
                 if col_name in df.columns:
-                    # Use efficient isin operation
                     mask &= df[col_name].isin(filter_values)
         
         result_df = df[mask]
         
-        # Cache result (limit cache size)
         if len(self._filter_cache) > 50:
             # Remove oldest entries
             old_keys = list(self._filter_cache.keys())[:25]
@@ -186,7 +172,6 @@ class Sankey:
             self._aggregation_cache[cache_key] = df
             return df
         
-        # Efficient column mapping
         df_display = df.copy()
         
         for col_name in columns_to_show:
@@ -196,10 +181,8 @@ class Sankey:
                 
                 if mapping_func:
                     display_col = f'display_{col_name}'
-                    # Vectorized application
                     df_display[display_col] = df_display[col_name].apply(mapping_func)
         
-        # Cache with size limit
         if len(self._aggregation_cache) > 20:
             old_keys = list(self._aggregation_cache.keys())[:10]
             for key in old_keys:
@@ -208,39 +191,46 @@ class Sankey:
         self._aggregation_cache[cache_key] = df_display
         return df_display
     
-    def _create_links_optimized(self, df_display: pd.DataFrame, node_indices: Dict, 
-                               node_colors: List, column_mappings: Dict, 
+    def _create_links_optimized(self, df_display: pd.DataFrame, node_indices: Dict,
+                               node_colors: List, column_mappings: Dict,
                                columns_to_show: List[str]) -> Dict:
-        """Optimized link creation using vectorized operations."""
+        """Optimized link creation using vectorized operations. Handles both raw and pre-aggregated data."""
         links = {'source': [], 'target': [], 'value': [], 'color': []}
-        
-        # Process all column pairs efficiently
+
+        # Check if data is pre-aggregated (has 'count' column)
+        is_aggregated = 'count' in df_display.columns
+
         for i in range(len(columns_to_show) - 1):
             source_col = columns_to_show[i]
             target_col = columns_to_show[i + 1]
-            
+
             source_col_name = column_mappings[source_col]
             target_col_name = column_mappings[target_col]
-            
+
             if source_col_name not in df_display.columns or target_col_name not in df_display.columns:
                 continue
-            
-            # Efficient groupby with size
-            grouped = df_display.groupby([source_col_name, target_col_name], observed=True).size()
-            
+
+            # Handle aggregated vs non-aggregated data
+            if is_aggregated:
+                grouped = df_display.groupby([source_col_name, target_col_name], observed=True)['count'].sum()
+                logger = logging.getLogger(__name__)
+                logger.info(f"[SANKEY_LINKS DEBUG] Grouping {source_col_name} -> {target_col_name}: {len(grouped)} pairs, total={grouped.sum()}")
+            else:
+                grouped = df_display.groupby([source_col_name, target_col_name], observed=True).size()
+
             # Vectorized processing of groups
             for (source_val, target_val), count in grouped.items():
-                if (source_val in node_indices[source_col] and 
+                if (source_val in node_indices[source_col] and
                     target_val in node_indices[target_col]):
-                    
+
                     source_idx = node_indices[source_col][source_val]
                     target_idx = node_indices[target_col][target_val]
-                    
+
                     links['source'].append(source_idx)
                     links['target'].append(target_idx)
-                    links['value'].append(int(count))  # Ensure int for JSON serialization
+                    links['value'].append(int(count))  
                     links['color'].append(self._add_transparency(node_colors[source_idx]))
-        
+
         return links
     
     def _determine_detail_levels(self, active_filters, columns_to_show):
@@ -288,7 +278,6 @@ class Sankey:
         self._detail_levels_cache[cache_key] = detail_levels
         return detail_levels
     
-    # Keep existing helper methods with minimal changes
     def _find_item_path(self, item, data, path=[]):
         """Recursively find the full path to an item in nested data structure."""
         for key, value in data.items():
@@ -365,21 +354,17 @@ class Sankey:
             else:
                 column_mappings[col_name] = col_name
         
-        # Efficient unique value extraction - FIXED for categoricals
         categories = {}
         for col_name in columns_to_show:
             mapped_col = column_mappings[col_name]
             if mapped_col in df_display.columns:
-                # FIXED: Handle categorical columns properly
                 if df_display[mapped_col].dtype.name == 'category':
-                    # For categorical, get unique values from the actual data, not all categories
                     categories[col_name] = df_display[mapped_col].dropna().unique().tolist()
                 else:
                     categories[col_name] = df_display[mapped_col].unique().tolist()
             else:
                 categories[col_name] = []
         
-        # Create node structure efficiently
         node_labels = []
         node_indices = {}
         current_index = 0
@@ -391,7 +376,6 @@ class Sankey:
                 node_labels.append(label)
                 current_index += 1
         
-        # Efficient color assignment
         vivid = self.default_colors
         node_colors = []
         
@@ -408,7 +392,6 @@ class Sankey:
         
         result = (categories, node_labels, node_indices, node_colors, column_mappings)
         
-        # Cache with size limit
         if len(self._node_cache) > 30:
             old_keys = list(self._node_cache.keys())[:15]
             for key in old_keys:
@@ -441,7 +424,6 @@ class Sankey:
             )
         )])
         
-        # Create annotations for column headers
         annotations = []
         num_columns = len(columns_to_show)
         if num_columns > 1:
@@ -488,12 +470,10 @@ class Sankey:
         """
         Optimized draw method with improved caching and performance.
         """
-        # Create progress bar
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         try:
-            # Set defaults
             status_text.text(" ")
             progress_bar.progress(10)
             
@@ -502,7 +482,6 @@ class Sankey:
             
             active_filters = active_filters or {}
             
-            # Validate inputs
             if len(columns_to_show) < 2:
                 raise ValueError("At least 2 columns are required to create a Sankey diagram")
             
@@ -572,7 +551,6 @@ class Sankey:
             return result
             
         finally:
-            # Clean up progress indicators after a short delay
             import time
             time.sleep(0.5)
             progress_bar.empty()
